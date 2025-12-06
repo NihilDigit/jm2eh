@@ -3,7 +3,7 @@ JM2E: JMComic to E-Hentai link converter with fallback chain.
 
 Query flow (4 queries max):
 1. E-Hentai: Pure romaji (pykakasi)
-2. E-Hentai: Romaji + English keywords (Jamdict dictionary lookup)
+2. E-Hentai: Romaji + English keywords (SimplyTranslate for katakana)
 3. E-Hentai: English translation (SimplyTranslate API)
 4. wnacg: Chinese title direct search
 
@@ -26,7 +26,7 @@ import opencc_purepy as opencc
 import pykakasi
 import jmcomic
 from ehentai import get_search
-from jamdict import Jamdict
+
 
 # Similarity threshold for matching
 SIMILARITY_THRESHOLD = 0.55
@@ -35,7 +35,7 @@ SIMILARITY_THRESHOLD = 0.55
 _s2t = opencc.OpenCC("s2t")
 _t2jp = opencc.OpenCC("t2jp")
 _kks = pykakasi.kakasi()
-_jam = Jamdict()
+
 
 # Shared HTTP client for connection pooling
 _http_client: Optional[httpx.Client] = None
@@ -124,56 +124,6 @@ def to_romaji_spaced(text: str) -> str:
     return " ".join(parts).lower()
 
 
-def lookup_english_keywords(text: str) -> list[str]:
-    """Use Jamdict to find English translations for Japanese words.
-
-    Returns a list of English keywords found in the dictionary.
-    """
-    text = to_jp_kanji(text)
-    # Remove special characters and split into potential words
-    text = re.sub(r"[①②③④⑤⑥⑦⑧⑨⑩♡♥☆★◆◇○●～〜\+\-\[\]\(\)]", " ", text)
-
-    english_keywords = []
-
-    # Try to look up each segment
-    segments = _kks.convert(text)
-    for seg in segments:
-        orig = seg.get("orig", "")
-        if not orig or len(orig) < 2:
-            continue
-
-        # Skip if already English/romaji
-        if orig.isascii():
-            english_keywords.append(orig.lower())
-            continue
-
-        # Look up in Jamdict
-        try:
-            result = _jam.lookup(orig)
-            if result.entries:
-                # Get the first sense's English gloss
-                for entry in result.entries[:1]:
-                    for sense in entry.senses[:1]:
-                        for gloss in sense.gloss[:1]:
-                            eng = str(gloss).lower()
-                            # Filter out very common/generic words
-                            if len(eng) >= 3 and eng not in [
-                                "the",
-                                "a",
-                                "an",
-                                "to",
-                                "of",
-                                "and",
-                                "is",
-                                "are",
-                            ]:
-                                english_keywords.append(eng)
-        except Exception:
-            pass
-
-    return english_keywords[:5]  # Limit to 5 keywords
-
-
 def _is_katakana_word(text: str) -> bool:
     """Check if text is primarily katakana (80%+ katakana characters)."""
     if not text:
@@ -184,24 +134,40 @@ def _is_katakana_word(text: str) -> bool:
     return katakana_count >= len(text) * 0.8
 
 
-def _katakana_to_english(word: str) -> Optional[str]:
-    """Convert katakana word to English using Jamdict dictionary.
+def _translate_katakana_words(katakana_words: list[str]) -> dict[str, str]:
+    """Translate multiple katakana words to English using SimplyTranslate API.
 
-    Only returns single English words (no phrases).
+    Returns a dict mapping katakana -> English translation.
+    Only includes single-word translations (no phrases).
     """
+    if not katakana_words:
+        return {}
+
+    # Join words with separator that won't appear in translation
+    separator = " | "
+    combined = separator.join(katakana_words)
+
     try:
-        result = _jam.lookup(word)
-        if result.entries:
-            for entry in result.entries[:2]:
-                for sense in entry.senses[:2]:
-                    for gloss in sense.gloss[:2]:
-                        eng = str(gloss).lower()
-                        # Only single words, no phrases
-                        if " " not in eng and len(eng) >= 3:
-                            return eng
+        client = _get_http_client()
+        resp = client.get(
+            TRANSLATE_API,
+            params={"engine": "google", "from": "ja", "to": "en", "text": combined},
+        )
+        if resp.status_code == 200:
+            translated = resp.json().get("translated_text", "")
+            # Split back and map
+            parts = translated.split("|")
+            result = {}
+            for i, kata in enumerate(katakana_words):
+                if i < len(parts):
+                    eng = parts[i].strip().lower()
+                    # Only single words, no phrases
+                    if eng and " " not in eng and len(eng) >= 3:
+                        result[kata] = eng
+            return result
     except Exception:
         pass
-    return None
+    return {}
 
 
 def to_romaji_with_english(text: str) -> str:
@@ -218,8 +184,20 @@ def to_romaji_with_english(text: str) -> str:
     text = re.sub(r"[①②③④⑤⑥⑦⑧⑨⑩♡♥☆★◆◇○●～〜]", " ", text)
 
     segments = _kks.convert(text)
-    result_parts = []
 
+    # First pass: collect katakana words
+    katakana_words = []
+    for seg in segments:
+        orig = seg.get("orig", "")
+        if orig and _is_katakana_word(orig) and len(orig) >= 2:
+            if orig not in katakana_words:
+                katakana_words.append(orig)
+
+    # Batch translate katakana words
+    katakana_translations = _translate_katakana_words(katakana_words)
+
+    # Second pass: build result
+    result_parts = []
     for seg in segments:
         orig = seg.get("orig", "")
         hepburn = seg.get("hepburn", "")
@@ -234,7 +212,7 @@ def to_romaji_with_english(text: str) -> str:
 
         # Only convert katakana words to English
         if _is_katakana_word(orig) and len(orig) >= 2:
-            english_word = _katakana_to_english(orig)
+            english_word = katakana_translations.get(orig)
             if english_word:
                 result_parts.append(english_word)
                 continue
