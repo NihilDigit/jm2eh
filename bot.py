@@ -22,7 +22,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Telegram Bot Token
-BOT_TOKEN = "8307297002:aAHmvY2Ho8mL3oFNmX_YTLH2c813gPYKKm0"
+BOT_TOKEN = "8307297002:AAHmvY2Ho8mL3oFNmX_YTLH2c813gPYKKm0"
 
 # Global converter instance
 converter: JM2EConverter = None
