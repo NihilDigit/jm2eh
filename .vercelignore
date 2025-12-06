@@ -1,0 +1,11 @@
+.pixi/
+.pixi/**
+__pycache__/
+__pycache__/**
+.ruff_cache/
+.ruff_cache/**
+*.log
+test_output.txt
+bot.py
+pixi.toml
+pixi.lock

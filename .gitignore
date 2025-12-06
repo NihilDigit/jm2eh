@@ -6,3 +6,4 @@ __pycache__/
 *.log
 somethinguwillneed.md
 test_output.txt
+.vercel

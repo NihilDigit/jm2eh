@@ -2,7 +2,6 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "functions": {
     "api/webhook.py": {
-      "runtime": "@vercel/python@latest",
       "maxDuration": 60
     }
   },
