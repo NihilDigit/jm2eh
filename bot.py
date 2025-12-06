@@ -108,10 +108,11 @@ async def process_jm_id(update: Update, jm_id: str) -> None:
         result = conv.convert(jm_id)
 
         # Format response based on source
-        source_emoji = {"ehentai": "✅", "hitomi": "🔶", "google": "🔍"}
+        source_emoji = {"ehentai": "✅", "wnacg": "📗", "hitomi": "🔶", "google": "🔍"}
 
         source_name = {
             "ehentai": "E-Hentai",
+            "wnacg": "绅士漫画",
             "hitomi": "Hitomi.la (search)",
             "google": "Google (search)",
         }
