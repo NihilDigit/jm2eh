@@ -35,8 +35,21 @@ EXTRA_CHAR_MAP = {
     "糹": "糸",
 }
 
+# Extra character mappings for romaji conversion only (異体字 -> 正字 for correct reading)
+ROMAJI_CHAR_MAP = {
+    "娵": "嫁",  # 異体字: 華娵 -> 華嫁 (hanayome)
+}
+
 # SimplyTranslate API endpoint
 TRANSLATE_API = "https://simplytranslate.org/api/translate"
+
+# E-Hentai special characters that break search
+EH_SPECIAL_CHARS = re.compile(r"[~\[\]{}()|\\^$*+?.]")
+
+
+def clean_for_eh_search(text: str) -> str:
+    """Remove special characters that break E-Hentai search."""
+    return EH_SPECIAL_CHARS.sub(" ", text).strip()
 
 
 def to_jp_kanji(text: str) -> str:
@@ -50,6 +63,9 @@ def to_jp_kanji(text: str) -> str:
 def to_romaji(text: str) -> str:
     """Convert Japanese/Chinese text to pure romaji (no spaces)."""
     text = to_jp_kanji(text)
+    # Apply romaji-specific character mappings for correct readings
+    for orig, repl in ROMAJI_CHAR_MAP.items():
+        text = text.replace(orig, repl)
     # Remove special characters
     text = re.sub(r"[①②③④⑤⑥⑦⑧⑨⑩♡♥☆★◆◇○●～〜]", "", text)
     result = _kks.convert(text)
@@ -59,6 +75,9 @@ def to_romaji(text: str) -> str:
 def to_romaji_spaced(text: str) -> str:
     """Convert Japanese/Chinese text to romaji with spaces between words."""
     text = to_jp_kanji(text)
+    # Apply romaji-specific character mappings for correct readings
+    for orig, repl in ROMAJI_CHAR_MAP.items():
+        text = text.replace(orig, repl)
     # Remove special characters
     text = re.sub(r"[①②③④⑤⑥⑦⑧⑨⑩♡♥☆★◆◇○●～〜]", " ", text)
     result = _kks.convert(text)
@@ -261,6 +280,10 @@ def calc_match_score(
         if jm_romaji and romaji_norm:
             sim = SequenceMatcher(None, jm_romaji, romaji_norm).ratio()
             scores.append((sim, "romaji"))
+            # Strategy 2b: Check if JM romaji is a prefix of EH romaji
+            # This handles cases like "Title + Title After Story" where JM only has "Title"
+            if len(jm_romaji) >= 10 and romaji_norm.startswith(jm_romaji):
+                scores.append((0.90, "romaji_prefix"))
 
     # Strategy 3: English translation match
     if jm_english and romaji_part:
@@ -393,40 +416,54 @@ class JM2EConverter:
 
             best_match_url: Optional[str] = None
             best_match_name: Optional[str] = None
-            best_score = 0.0
+            best_total_score = 0.0
 
             for gallery in page.gl_table:
                 gallery_name = gallery.name or ""
                 if not gallery_name:
                     continue
 
+                # Calculate score for each candidate and sum them
+                # This way, a result that matches ALL candidates well ranks higher
+                total_score = 0.0
+                max_single_score = 0.0
                 for candidate in candidates:
-                    score, method = calc_match_score(
-                        candidate, gallery_name, english_title
-                    )
+                    score, _ = calc_match_score(candidate, gallery_name, english_title)
+                    total_score += score
+                    max_single_score = max(max_single_score, score)
 
-                    if score > best_score:
-                        best_score = score
-                        best_match_url = gallery.view_url
-                        best_match_name = gallery_name
+                # Use weighted score: prioritize high max score but also reward matching all candidates
+                # This helps when one candidate is more specific (like English title with "Zenpen")
+                weighted_score = (
+                    max_single_score * 0.7 + (total_score / len(candidates)) * 0.3
+                )
 
-                    if score >= SIMILARITY_THRESHOLD:
-                        print(
-                            f"  [E-H] ✓ Match ({method}): {score:.2f} | {gallery_name[:60]}"
-                        )
-                        return gallery.view_url, score
+                if weighted_score > best_total_score:
+                    best_total_score = weighted_score
+                    best_match_url = gallery.view_url
+                    best_match_name = gallery_name
 
-            if (
-                best_match_url
-                and best_score >= SIMILARITY_THRESHOLD
-                and best_match_name
-            ):
-                print(f"  [E-H] ✓ Best: {best_score:.2f} | {best_match_name[:60]}")
-                return best_match_url, best_score
+            # Determine threshold - lower it if query is very specific (has CJK) and only one result
+            threshold = SIMILARITY_THRESHOLD
+            has_cjk_query = any("\u3040" <= c <= "\u9fff" for c in query)
+            single_result = len(page.gl_table) == 1
+
+            if has_cjk_query and single_result and best_total_score >= 0.15:
+                # Very specific query with single result - trust it
+                print(
+                    f"  [E-H] ✓ Single result (CJK query): {best_total_score:.2f} | {best_match_name[:60] if best_match_name else ''}"
+                )
+                return best_match_url, max(best_total_score, 0.70)
+
+            if best_match_url and best_total_score >= threshold and best_match_name:
+                print(
+                    f"  [E-H] ✓ Best: {best_total_score:.2f} | {best_match_name[:60]}"
+                )
+                return best_match_url, best_total_score
 
             if best_match_name:
                 print(
-                    f"  [E-H] ✗ Below threshold: {best_score:.2f} | {best_match_name[:60]}"
+                    f"  [E-H] ✗ Below threshold: {best_total_score:.2f} | {best_match_name[:60]}"
                 )
 
         except Exception as e:
@@ -434,79 +471,143 @@ class JM2EConverter:
 
         return None, 0.0
 
+    def _extract_jp_title(self, full_title: str) -> Optional[str]:
+        """Extract Japanese title from JM full title.
+
+        Looks for text containing hiragana/katakana after ] bracket.
+        """
+        # Common patterns for Japanese titles in JM format
+        # Try to find text with Japanese kana after a ] bracket
+        patterns = [
+            r"\]\s*([^\[]*[\u3040-\u309F\u30A0-\u30FF][^\[]*)",  # After ]
+            r"([\u3040-\u309F\u30A0-\u30FF][\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF\u0020-\u007E～〜]+)",  # Kana-heavy segment
+        ]
+
+        for pattern in patterns:
+            match = re.search(pattern, full_title)
+            if match:
+                jp_part = match.group(1).strip()
+                # Verify it has enough kana (at least 3)
+                kana_count = sum(1 for c in jp_part if "\u3040" <= c <= "\u30ff")
+                if kana_count >= 3:
+                    # Clean up: remove trailing tags like [中国翻译]
+                    jp_part = re.sub(r"\s*\[[^\]]*\]\s*$", "", jp_part).strip()
+                    return jp_part
+        return None
+
     def search_wnacg(
-        self, oname: str, candidates: list[str]
+        self, oname: str, candidates: list[str], full_title: str = "", author: str = ""
     ) -> tuple[Optional[str], float]:
         """Search wnacg.com for Chinese versions."""
         from bs4 import BeautifulSoup
+        from curl_cffi import requests as curl_requests
 
         best_match_url: Optional[str] = None
         best_match_title: Optional[str] = None
         best_score = 0.0
 
-        # Clean oname for search
+        # Build search queries: try Japanese title first, then Chinese oname
+        search_queries: list[tuple[str, bool]] = []  # (query, is_japanese)
+
+        # Try to extract Japanese title from full title and convert to proper kanji
+        if full_title:
+            jp_title = self._extract_jp_title(full_title)
+            if jp_title:
+                # Convert simplified Chinese chars to Japanese kanji
+                jp_title_converted = to_jp_kanji(jp_title)
+                # Take first part (before any series markers like 2～)
+                jp_search = re.sub(r"[\d]+[～〜].*", "", jp_title_converted).strip()
+                if len(jp_search) >= 4:
+                    search_queries.append((jp_search, True))
+
+        # Also try Chinese oname
         clean_oname = re.sub(r"[\d\s\+]+$", "", oname).strip()
-        if not clean_oname or len(clean_oname) < 3:
+        if clean_oname and len(clean_oname) >= 3:
+            search_queries.append((clean_oname, False))
+
+        if not search_queries:
             return None, 0.0
 
-        try:
-            encoded_query = urllib.parse.quote(clean_oname)
-            url = f"https://wnacg.com/search/?q={encoded_query}&f=_all&s=create_time_DESC&syn=yes"
-            print(f"  [wnacg] Searching: {clean_oname[:50]}")
+        # Prepare author name variations for matching
+        author_jp = to_jp_kanji(author) if author else ""
 
-            resp = httpx.get(url, timeout=10, follow_redirects=True)
-            if resp.status_code != 200:
-                return None, 0.0
+        for search_term, is_japanese in search_queries:
+            try:
+                encoded_query = urllib.parse.quote(search_term)
+                url = f"https://www.wnacg.com/search/?q={encoded_query}&f=_all&s=create_time_DESC&syn=yes"
+                print(f"  [wnacg] Searching: {search_term[:50]}")
 
-            soup = BeautifulSoup(resp.text, "lxml")
-            for link in soup.find_all(
-                "a", href=re.compile(r"/photos-index-aid-\d+\.html")
-            ):
-                title = link.get_text(strip=True)
-                if not title:
+                # Use curl_cffi to bypass wnacg's httpx blocking
+                resp = curl_requests.get(url, impersonate="chrome", timeout=15)
+                if resp.status_code != 200:
                     continue
 
-                # Only match Chinese versions
-                if not re.search(r"中[国國]翻[译譯]|[汉漢]化|中文", title):
-                    continue
+                soup = BeautifulSoup(resp.text, "lxml")
+                seen_urls: set[str] = set()  # Deduplicate results
 
-                href = link.get("href", "")
-                if not href:
-                    continue
-                href_str = str(href)
-                gallery_url = (
-                    f"https://wnacg.com{href_str}"
-                    if href_str.startswith("/")
-                    else href_str
-                )
-
-                for candidate in candidates:
-                    clean_candidate = re.sub(r"[\d\s\+]+$", "", candidate).strip()
-                    if not clean_candidate or len(clean_candidate) < 3:
+                for link in soup.find_all("a", href=True):
+                    href = str(link.get("href", ""))
+                    if "/photos-index-aid-" not in href:
                         continue
 
-                    # Contains match - for wnacg we're more lenient since we already
-                    # filter by Chinese translation tags. Require at least 4 chars.
-                    if len(clean_candidate) >= 4 and clean_candidate in title:
-                        print(f"  [wnacg] ✓ Contains: {title[:60]}")
-                        return gallery_url, 0.90
+                    # Deduplicate
+                    if href in seen_urls:
+                        continue
+                    seen_urls.add(href)
 
-                    # Similarity match
-                    jm_norm = normalize_cjk(candidate)
-                    title_norm = normalize_cjk(title)
-                    if jm_norm and title_norm:
-                        sim = SequenceMatcher(None, jm_norm, title_norm).ratio()
-                        if sim > best_score:
-                            best_score = sim
-                            best_match_url = gallery_url
-                            best_match_title = title
+                    # Get title from link title attribute or text
+                    title = str(link.get("title", "")) or link.get_text(strip=True)
+                    # Remove HTML tags that might be in title attribute
+                    title = re.sub(r"<[^>]+>", "", title)
+                    if not title:
+                        continue
 
-                        if sim >= SIMILARITY_THRESHOLD:
-                            print(f"  [wnacg] ✓ Match: {sim:.2f} | {title[:60]}")
-                            return gallery_url, sim
+                    # Only match Chinese versions
+                    if not re.search(r"中[国國]翻[译譯]|[汉漢]化|中文", title):
+                        continue
 
-        except Exception as e:
-            print(f"  [wnacg] Search error: {e}")
+                    gallery_url = (
+                        f"https://www.wnacg.com{href}" if href.startswith("/") else href
+                    )
+
+                    # For Japanese title search: verify author name to avoid false positives
+                    # Common titles like "かわいい" can match many unrelated works
+                    if is_japanese:
+                        # Check if author name appears in the wnacg title
+                        if author and (author in title or author_jp in title):
+                            print(f"  [wnacg] ✓ JP+Author match: {title[:60]}")
+                            return gallery_url, 0.90
+                        # If no author match, continue searching (don't return immediately)
+                        continue
+
+                    # For Chinese oname search: try candidate matching
+                    for candidate in candidates:
+                        clean_candidate = re.sub(r"[\d\s\+]+$", "", candidate).strip()
+                        if not clean_candidate or len(clean_candidate) < 3:
+                            continue
+
+                        # Contains match - for wnacg we're more lenient since we already
+                        # filter by Chinese translation tags. Require at least 4 chars.
+                        if len(clean_candidate) >= 4 and clean_candidate in title:
+                            print(f"  [wnacg] ✓ Contains: {title[:60]}")
+                            return gallery_url, 0.90
+
+                        # Similarity match
+                        jm_norm = normalize_cjk(candidate)
+                        title_norm = normalize_cjk(title)
+                        if jm_norm and title_norm:
+                            sim = SequenceMatcher(None, jm_norm, title_norm).ratio()
+                            if sim > best_score:
+                                best_score = sim
+                                best_match_url = gallery_url
+                                best_match_title = title
+
+                            if sim >= SIMILARITY_THRESHOLD:
+                                print(f"  [wnacg] ✓ Match: {sim:.2f} | {title[:60]}")
+                                return gallery_url, sim
+
+            except Exception as e:
+                print(f"  [wnacg] Search error: {e}")
 
         if best_match_url and best_score >= SIMILARITY_THRESHOLD and best_match_title:
             print(f"  [wnacg] ✓ Best: {best_score:.2f} | {best_match_title[:60]}")
@@ -556,7 +657,7 @@ class JM2EConverter:
         # --- Query 1: Best available title ---
         # If we have English, use it; otherwise use romaji
         if english_title:
-            title_for_search = english_title
+            title_for_search = clean_for_eh_search(english_title)
         else:
             title_for_search = to_romaji_spaced(oname)
 
@@ -576,6 +677,21 @@ class JM2EConverter:
                 source="ehentai",
                 similarity=sim,
             )
+
+        # --- Query 1b: Quoted title without author (fallback for bad author romaji) ---
+        # This helps when author name romaji is wrong (e.g., 柳田史太 -> yanagidashita vs yanagida fumita)
+        if title_for_search:
+            query1b = f'"{title_for_search}" l:chinese'
+            link, sim = self.search_ehentai_single(query1b, candidates, english_title)
+            if link:
+                return ConversionResult(
+                    jm_id=jm_id,
+                    title=title,
+                    author=author,
+                    link=link,
+                    source="ehentai",
+                    similarity=sim,
+                )
 
         # --- Query 2: Romaji with English substitutions (Jamdict) ---
         print("  → Trying romaji with English substitutions...")
@@ -617,9 +733,56 @@ class JM2EConverter:
                         similarity=sim,
                     )
 
+        # --- Query 3b: Japanese title direct search ---
+        # Fallback for cases where romaji conversion is wrong (e.g., 甘喰み -> amabami not kanshoku)
+        jp_oname = to_jp_kanji(oname)
+        if jp_oname and any(
+            "\u3040" <= c <= "\u9fff" for c in jp_oname
+        ):  # Has CJK chars
+            print("  → Trying Japanese title search...")
+            query3b = f"{jp_oname} l:chinese"
+            link, sim = self.search_ehentai_single(query3b, candidates, english_title)
+            if link:
+                return ConversionResult(
+                    jm_id=jm_id,
+                    title=title,
+                    author=author,
+                    link=link,
+                    source="ehentai",
+                    similarity=sim,
+                )
+
+        # --- Query 3c: Extract Japanese title from full title ---
+        # For cases where oname is English but full title has Japanese (e.g., "Dopuya [author] どぴゅあ")
+        jp_from_title = self._extract_jp_title(title)
+        if jp_from_title:
+            # Clean up: take only the first part before + or numbers
+            jp_search = re.sub(r"\s*[+＋].*", "", jp_from_title).strip()
+            jp_search = re.sub(r"\s*\d+P.*", "", jp_search).strip()
+            jp_search = to_jp_kanji(jp_search)
+            if jp_search and len(jp_search) >= 3 and jp_search != jp_oname:
+                # Try with author name for better precision
+                author_jp = to_jp_kanji(author) if author else ""
+                print(f"  → Trying extracted JP title: {author_jp} {jp_search}")
+                query3c = f"{author_jp} {jp_search} l:chinese".strip()
+                link, sim = self.search_ehentai_single(
+                    query3c, candidates, english_title
+                )
+                if link:
+                    return ConversionResult(
+                        jm_id=jm_id,
+                        title=title,
+                        author=author,
+                        link=link,
+                        source="ehentai",
+                        similarity=sim,
+                    )
+
         # --- Query 4: wnacg ---
         print("  → Trying wnacg.com...")
-        link, sim = self.search_wnacg(oname, candidates)
+        link, sim = self.search_wnacg(
+            oname, candidates, full_title=title, author=author
+        )
         if link:
             return ConversionResult(
                 jm_id=jm_id,
