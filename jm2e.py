@@ -6,12 +6,19 @@ Query flow (4 queries max):
 2. E-Hentai: Romaji + English keywords (Jamdict dictionary lookup)
 3. E-Hentai: English translation (SimplyTranslate API)
 4. wnacg: Chinese title direct search
+
+Performance optimizations:
+- Caches derived forms (romaji, jp_kanji) per conversion
+- Uses shared HTTP client for connection pooling
+- Concurrent E-Hentai searches for faster results
 """
 
 import re
 import urllib.parse
-from dataclasses import dataclass
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass, field
 from difflib import SequenceMatcher
+from functools import lru_cache
 from typing import Optional
 
 import httpx
@@ -24,11 +31,27 @@ from jamdict import Jamdict
 # Similarity threshold for matching
 SIMILARITY_THRESHOLD = 0.55
 
-# Initialize converters
+# Initialize converters (module-level singletons)
 _s2t = opencc.OpenCC("s2t")
 _t2jp = opencc.OpenCC("t2jp")
 _kks = pykakasi.kakasi()
 _jam = Jamdict()
+
+# Shared HTTP client for connection pooling
+_http_client: Optional[httpx.Client] = None
+
+
+def _get_http_client() -> httpx.Client:
+    """Get or create shared HTTP client with connection pooling."""
+    global _http_client
+    if _http_client is None:
+        _http_client = httpx.Client(
+            timeout=httpx.Timeout(10.0, connect=5.0),
+            limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
+            follow_redirects=True,
+        )
+    return _http_client
+
 
 # Extra character mappings not handled by OpenCC
 EXTRA_CHAR_MAP = {
@@ -52,35 +75,51 @@ def clean_for_eh_search(text: str) -> str:
     return EH_SPECIAL_CHARS.sub(" ", text).strip()
 
 
+@lru_cache(maxsize=256)
 def to_jp_kanji(text: str) -> str:
-    """Convert Simplified Chinese to Japanese kanji via Traditional Chinese."""
-    text = _t2jp.convert(_s2t.convert(text))
+    """Convert Simplified Chinese to Japanese kanji via Traditional Chinese.
+
+    Cached for performance - same text always yields same result.
+    """
+    result = _t2jp.convert(_s2t.convert(text))
     for trad, jp in EXTRA_CHAR_MAP.items():
-        text = text.replace(trad, jp)
-    return text
+        result = result.replace(trad, jp)
+    return result
 
 
+# Pre-compiled regex for special characters
+_SPECIAL_CHARS_RE = re.compile(r"[①②③④⑤⑥⑦⑧⑨⑩♡♥☆★◆◇○●～〜]")
+
+
+@lru_cache(maxsize=256)
 def to_romaji(text: str) -> str:
-    """Convert Japanese/Chinese text to pure romaji (no spaces)."""
-    text = to_jp_kanji(text)
+    """Convert Japanese/Chinese text to pure romaji (no spaces).
+
+    Cached for performance - same text always yields same result.
+    """
+    jp_text = to_jp_kanji(text)
     # Apply romaji-specific character mappings for correct readings
     for orig, repl in ROMAJI_CHAR_MAP.items():
-        text = text.replace(orig, repl)
+        jp_text = jp_text.replace(orig, repl)
     # Remove special characters
-    text = re.sub(r"[①②③④⑤⑥⑦⑧⑨⑩♡♥☆★◆◇○●～〜]", "", text)
-    result = _kks.convert(text)
+    jp_text = _SPECIAL_CHARS_RE.sub("", jp_text)
+    result = _kks.convert(jp_text)
     return "".join([item["hepburn"] for item in result]).lower().replace(" ", "")
 
 
+@lru_cache(maxsize=256)
 def to_romaji_spaced(text: str) -> str:
-    """Convert Japanese/Chinese text to romaji with spaces between words."""
-    text = to_jp_kanji(text)
+    """Convert Japanese/Chinese text to romaji with spaces between words.
+
+    Cached for performance - same text always yields same result.
+    """
+    jp_text = to_jp_kanji(text)
     # Apply romaji-specific character mappings for correct readings
     for orig, repl in ROMAJI_CHAR_MAP.items():
-        text = text.replace(orig, repl)
-    # Remove special characters
-    text = re.sub(r"[①②③④⑤⑥⑦⑧⑨⑩♡♥☆★◆◇○●～〜]", " ", text)
-    result = _kks.convert(text)
+        jp_text = jp_text.replace(orig, repl)
+    # Remove special characters (replace with space to preserve word boundaries)
+    jp_text = _SPECIAL_CHARS_RE.sub(" ", jp_text)
+    result = _kks.convert(jp_text)
     parts = [item["hepburn"] for item in result if item["hepburn"]]
     return " ".join(parts).lower()
 
@@ -208,12 +247,15 @@ def to_romaji_with_english(text: str) -> str:
 
 
 def translate_to_english(text: str, source: str = "ja") -> Optional[str]:
-    """Translate Japanese/Chinese text to English using SimplyTranslate API."""
+    """Translate Japanese/Chinese text to English using SimplyTranslate API.
+
+    Uses shared HTTP client for connection pooling.
+    """
     try:
-        resp = httpx.get(
+        client = _get_http_client()
+        resp = client.get(
             TRANSLATE_API,
             params={"engine": "google", "from": source, "to": "en", "text": text},
-            timeout=10,
         )
         if resp.status_code == 200:
             return resp.json().get("translated_text")
@@ -222,15 +264,22 @@ def translate_to_english(text: str, source: str = "ja") -> Optional[str]:
     return None
 
 
+# Pre-compiled regex for normalization
+_CJK_NORM_RE = re.compile(r"[^a-z0-9\u3040-\u9faf]")
+_ROMAJI_NORM_RE = re.compile(r"[^a-z0-9]")
+
+
+@lru_cache(maxsize=512)
 def normalize_cjk(text: str) -> str:
-    """Normalize for CJK comparison."""
-    text = to_jp_kanji(text)
-    return re.sub(r"[^a-z0-9\u3040-\u9faf]", "", text.lower())
+    """Normalize for CJK comparison. Cached for performance."""
+    jp_text = to_jp_kanji(text)
+    return _CJK_NORM_RE.sub("", jp_text.lower())
 
 
+@lru_cache(maxsize=512)
 def normalize_romaji(text: str) -> str:
-    """Normalize for romaji comparison."""
-    return re.sub(r"[^a-z0-9]", "", text.lower())
+    """Normalize for romaji comparison. Cached for performance."""
+    return _ROMAJI_NORM_RE.sub("", text.lower())
 
 
 def extract_eh_title_parts(eh_title: str) -> tuple[str, list[str]]:
@@ -330,6 +379,49 @@ class ConversionResult:
         return f"[{self.source.upper()}] {self.link}"
 
 
+@dataclass
+class SearchContext:
+    """Pre-computed search context for a single conversion.
+
+    Caches all derived forms to avoid repeated computation during search.
+    """
+
+    oname: str
+    author: str
+    title: str
+    candidates: list[str]
+    description: str
+
+    # Pre-computed derived forms (computed once)
+    author_romaji: str = ""
+    jp_oname: str = ""
+    romaji_spaced: str = ""
+    romaji_with_english: str = ""
+    english_title: Optional[str] = None
+    author_jp: str = ""
+
+    # Pre-computed normalized forms for candidates
+    candidate_norms: list[str] = field(default_factory=list)
+    candidate_romajis: list[str] = field(default_factory=list)
+
+    def __post_init__(self):
+        """Compute all derived forms once."""
+        # Author forms
+        if self.author:
+            self.author_romaji = to_romaji(self.author)
+            self.author_jp = to_jp_kanji(self.author)
+
+        # Title forms
+        self.jp_oname = to_jp_kanji(self.oname)
+        self.romaji_spaced = to_romaji_spaced(self.oname)
+        self.romaji_with_english = to_romaji_with_english(self.oname)
+
+        # Pre-compute normalized forms for all candidates
+        for c in self.candidates:
+            self.candidate_norms.append(normalize_cjk(c))
+            self.candidate_romajis.append(to_romaji(c))
+
+
 class JM2EConverter:
     """Converts JMComic IDs to E-Hentai links with fallback."""
 
@@ -386,10 +478,8 @@ class JM2EConverter:
         if not description:
             return None
 
-        # Remove common tags at the end
-        clean = re.sub(r"\s*\[[^\]]*\]\s*$", "", description)
-        clean = re.sub(r"\s*\[[^\]]*\]\s*$", "", clean)
-        clean = re.sub(r"\s*\[[^\]]*\]\s*$", "", clean)
+        # Remove common tags at the end (single pass with greedy matching)
+        clean = re.sub(r"(\s*\[[^\]]*\])+\s*$", "", description)
 
         # Try to extract title after [Author] or (Circle)
         for pattern in [r"\]\s*(.+)$", r"\)\s*(.+)$"]:
@@ -615,14 +705,21 @@ class JM2EConverter:
 
         return None, best_score
 
-    def convert(self, jm_id: str) -> ConversionResult:
-        """Convert JMComic ID to link with 4-query flow.
+    def convert(self, jm_id: str, concurrent: bool = True) -> ConversionResult:
+        """Convert JMComic ID to link with multi-query flow.
+
+        Args:
+            jm_id: JMComic album ID
+            concurrent: If True, run initial E-Hentai queries concurrently for speed
 
         Query flow:
         1. E-Hentai: Best available title (English from desc/title, or romaji)
+        1b. E-Hentai: Quoted title without author
         2. E-Hentai: Romaji + English keywords (Jamdict)
-        3. E-Hentai: English translation (SimplyTranslate)
-        4. wnacg: Chinese title search
+        3. E-Hentai: English translation (SimplyTranslate) - if no English title
+        3b. E-Hentai: Japanese title direct search
+        3c. E-Hentai: Extracted JP title from full title
+        4. wnacg: Chinese title search (fallback)
         """
         info = self.get_jm_info(jm_id)
         title = info["title"]
@@ -633,8 +730,14 @@ class JM2EConverter:
 
         print(f"JM{jm_id}: {title}")
 
-        # Prepare author romaji
-        author_romaji = to_romaji(author) if author else ""
+        # Create search context with pre-computed values
+        ctx = SearchContext(
+            oname=oname,
+            author=author,
+            title=title,
+            candidates=candidates.copy(),
+            description=description,
+        )
 
         # Check for existing English title in description/title
         english_from_desc = self._extract_title_from_description(description)
@@ -650,68 +753,65 @@ class JM2EConverter:
 
         # Best English title
         english_title = english_from_desc if has_english_desc else english_from_title
+        ctx.english_title = english_title
 
-        if english_title:
+        if english_title and english_title not in candidates:
             candidates.append(english_title)
 
-        # --- Query 1: Best available title ---
-        # If we have English, use it; otherwise use romaji
+        # Build search queries
+        queries: list[
+            tuple[str, str, Optional[str]]
+        ] = []  # (query, name, english_hint)
+
+        # Query 1: Best available title
         if english_title:
             title_for_search = clean_for_eh_search(english_title)
         else:
-            title_for_search = to_romaji_spaced(oname)
+            title_for_search = ctx.romaji_spaced
 
         # Truncate to first 4 words
         words = title_for_search.split()
         if len(words) > 4:
             title_for_search = " ".join(words[:4])
 
-        query1 = f"{author_romaji} {title_for_search} l:chinese".strip()
-        link, sim = self.search_ehentai_single(query1, candidates, english_title)
-        if link:
-            return ConversionResult(
-                jm_id=jm_id,
-                title=title,
-                author=author,
-                link=link,
-                source="ehentai",
-                similarity=sim,
-            )
+        query1 = f"{ctx.author_romaji} {title_for_search} l:chinese".strip()
+        queries.append((query1, "query1", english_title))
 
-        # --- Query 1b: Quoted title without author (fallback for bad author romaji) ---
-        # This helps when author name romaji is wrong (e.g., 柳田史太 -> yanagidashita vs yanagida fumita)
+        # Query 1b: Quoted title without author
         if title_for_search:
             query1b = f'"{title_for_search}" l:chinese'
-            link, sim = self.search_ehentai_single(query1b, candidates, english_title)
-            if link:
-                return ConversionResult(
-                    jm_id=jm_id,
-                    title=title,
-                    author=author,
-                    link=link,
-                    source="ehentai",
-                    similarity=sim,
-                )
+            queries.append((query1b, "query1b", english_title))
 
-        # --- Query 2: Romaji with English substitutions (Jamdict) ---
-        print("  → Trying romaji with English substitutions...")
-        romaji_eng = to_romaji_with_english(oname)
+        # Query 2: Romaji with English substitutions
+        romaji_eng = ctx.romaji_with_english
         if romaji_eng:
-            # Truncate to first 4 words
             romaji_eng_words = romaji_eng.split()
             if len(romaji_eng_words) > 4:
                 romaji_eng = " ".join(romaji_eng_words[:4])
-            query2 = f"{author_romaji} {romaji_eng} l:chinese".strip()
-            link, sim = self.search_ehentai_single(query2, candidates, romaji_eng)
-            if link:
-                return ConversionResult(
-                    jm_id=jm_id,
-                    title=title,
-                    author=author,
-                    link=link,
-                    source="ehentai",
-                    similarity=sim,
-                )
+            query2 = f"{ctx.author_romaji} {romaji_eng} l:chinese".strip()
+            if query2 != query1:  # Avoid duplicate
+                queries.append((query2, "query2", romaji_eng))
+
+        if concurrent and len(queries) >= 2:
+            # Run first batch of queries concurrently
+            result = self._search_concurrent(
+                queries, candidates, ctx, jm_id, title, author
+            )
+            if result:
+                return result
+        else:
+            # Sequential search
+            for query, name, eng_hint in queries:
+                link, sim = self.search_ehentai_single(query, candidates, eng_hint)
+                if link:
+                    return ConversionResult(
+                        jm_id=jm_id,
+                        title=title,
+                        author=author,
+                        link=link,
+                        source="ehentai",
+                        similarity=sim,
+                    )
 
         # --- Query 3: English translation (SimplyTranslate) ---
         if not english_title:
@@ -721,7 +821,7 @@ class JM2EConverter:
                 trans_words = translated.split()
                 if len(trans_words) > 4:
                     translated = " ".join(trans_words[:4])
-                query3 = f"{author_romaji} {translated} l:chinese".strip()
+                query3 = f"{ctx.author_romaji} {translated} l:chinese".strip()
                 link, sim = self.search_ehentai_single(query3, candidates, translated)
                 if link:
                     return ConversionResult(
@@ -734,11 +834,8 @@ class JM2EConverter:
                     )
 
         # --- Query 3b: Japanese title direct search ---
-        # Fallback for cases where romaji conversion is wrong (e.g., 甘喰み -> amabami not kanshoku)
-        jp_oname = to_jp_kanji(oname)
-        if jp_oname and any(
-            "\u3040" <= c <= "\u9fff" for c in jp_oname
-        ):  # Has CJK chars
+        jp_oname = ctx.jp_oname
+        if jp_oname and any("\u3040" <= c <= "\u9fff" for c in jp_oname):
             print("  → Trying Japanese title search...")
             query3b = f"{jp_oname} l:chinese"
             link, sim = self.search_ehentai_single(query3b, candidates, english_title)
@@ -753,18 +850,14 @@ class JM2EConverter:
                 )
 
         # --- Query 3c: Extract Japanese title from full title ---
-        # For cases where oname is English but full title has Japanese (e.g., "Dopuya [author] どぴゅあ")
         jp_from_title = self._extract_jp_title(title)
         if jp_from_title:
-            # Clean up: take only the first part before + or numbers
             jp_search = re.sub(r"\s*[+＋].*", "", jp_from_title).strip()
             jp_search = re.sub(r"\s*\d+P.*", "", jp_search).strip()
             jp_search = to_jp_kanji(jp_search)
             if jp_search and len(jp_search) >= 3 and jp_search != jp_oname:
-                # Try with author name for better precision
-                author_jp = to_jp_kanji(author) if author else ""
-                print(f"  → Trying extracted JP title: {author_jp} {jp_search}")
-                query3c = f"{author_jp} {jp_search} l:chinese".strip()
+                print(f"  → Trying extracted JP title: {ctx.author_jp} {jp_search}")
+                query3c = f"{ctx.author_jp} {jp_search} l:chinese".strip()
                 link, sim = self.search_ehentai_single(
                     query3c, candidates, english_title
                 )
@@ -802,6 +895,66 @@ class JM2EConverter:
             source="none",
             similarity=0.0,
         )
+
+    def _search_concurrent(
+        self,
+        queries: list[tuple[str, str, Optional[str]]],
+        candidates: list[str],
+        ctx: SearchContext,
+        jm_id: str,
+        title: str,
+        author: str,
+    ) -> Optional[ConversionResult]:
+        """Run multiple E-Hentai searches concurrently.
+
+        Returns the first successful result or None.
+        """
+        results: dict[str, tuple[Optional[str], float]] = {}
+
+        def search_one(
+            query_info: tuple[str, str, Optional[str]],
+        ) -> tuple[str, Optional[str], float]:
+            query, name, eng_hint = query_info
+            link, sim = self.search_ehentai_single(query, candidates, eng_hint)
+            return name, link, sim
+
+        # Run searches concurrently
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            futures = {executor.submit(search_one, q): q[1] for q in queries}
+
+            for future in as_completed(futures):
+                name, link, sim = future.result()
+                results[name] = (link, sim)
+
+                # Early exit if we found a good match
+                if link and sim >= SIMILARITY_THRESHOLD:
+                    # Cancel remaining futures (best effort)
+                    for f in futures:
+                        f.cancel()
+                    return ConversionResult(
+                        jm_id=jm_id,
+                        title=title,
+                        author=author,
+                        link=link,
+                        source="ehentai",
+                        similarity=sim,
+                    )
+
+        # Check results in priority order
+        for query, name, _ in queries:
+            if name in results:
+                link, sim = results[name]
+                if link:
+                    return ConversionResult(
+                        jm_id=jm_id,
+                        title=title,
+                        author=author,
+                        link=link,
+                        source="ehentai",
+                        similarity=sim,
+                    )
+
+        return None
 
 
 def test_conversion():
