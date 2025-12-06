@@ -1,0 +1,15 @@
+[workspace]
+authors = ["nihildigit <nihildigit@outlook.com>"]
+channels = ["conda-forge"]
+name = "jm2e"
+platforms = ["linux-64"]
+version = "0.1.0"
+
+[tasks]
+
+[dependencies]
+python = "3.11.*"
+
+[pypi-dependencies]
+jmcomic = "*"
+ehentai = "*"
