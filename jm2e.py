@@ -63,7 +63,10 @@ class JM2EConverter:
         return None
 
     def search_ehentai(self, title: str, author: str) -> Optional[str]:
-        """Search E-Hentai for the manga and return gallery URL if found."""
+        """Search E-Hentai for the manga and return gallery URL if found.
+
+        Priority: Chinese translation > any language
+        """
         search_queries = []
 
         # Strategy 1: Author name (most reliable)
@@ -80,12 +83,24 @@ class JM2EConverter:
         if jp_title and jp_title != cleaned_title:
             search_queries.append(jp_title)
 
+        # First pass: search with l:chinese filter (prefer Chinese translations)
         for query in search_queries:
             try:
-                print(f"  Searching E-Hentai: {query}")
+                chinese_query = f"{query} l:chinese"
+                print(f"  Searching E-Hentai (Chinese): {chinese_query}")
+                page = get_search(chinese_query, direct=True)
+                if page.gl_table:
+                    return page.gl_table[0].view_url
+            except Exception as e:
+                print(f"  E-Hentai search error: {e}")
+                continue
+
+        # Second pass: search without language filter (fallback to any language)
+        for query in search_queries:
+            try:
+                print(f"  Searching E-Hentai (any): {query}")
                 page = get_search(query, direct=True)
                 if page.gl_table:
-                    # Return the first result
                     return page.gl_table[0].view_url
             except Exception as e:
                 print(f"  E-Hentai search error: {e}")

@@ -1,0 +1,26 @@
+2025-12-06 21:50:02,819 - __main__ - INFO - Starting JM2E Bot...
+2025-12-06 21:50:04,129 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot8307297002:AAHmvY2Ho8mL3oFNmX_YTLH2c813gPYKKm0/getMe "HTTP/1.1 200 OK"
+2025-12-06 21:50:04,743 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot8307297002:AAHmvY2Ho8mL3oFNmX_YTLH2c813gPYKKm0/deleteWebhook "HTTP/1.1 200 OK"
+2025-12-06 21:50:04,744 - telegram.ext.Application - INFO - Application started
+2025-12-06 21:50:16,116 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot8307297002:AAHmvY2Ho8mL3oFNmX_YTLH2c813gPYKKm0/getUpdates "HTTP/1.1 200 OK"
+2025-12-06 21:50:26,658 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot8307297002:AAHmvY2Ho8mL3oFNmX_YTLH2c813gPYKKm0/getUpdates "HTTP/1.1 200 OK"
+2025-12-06 21:50:37,103 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot8307297002:AAHmvY2Ho8mL3oFNmX_YTLH2c813gPYKKm0/getUpdates "HTTP/1.1 200 OK"
+2025-12-06 21:50:42,884 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot8307297002:AAHmvY2Ho8mL3oFNmX_YTLH2c813gPYKKm0/getUpdates "HTTP/1.1 200 OK"
+2025-12-06 21:50:45,607 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot8307297002:AAHmvY2Ho8mL3oFNmX_YTLH2c813gPYKKm0/sendMessage "HTTP/1.1 200 OK"
+2025-12-06 21:50:52,564 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot8307297002:AAHmvY2Ho8mL3oFNmX_YTLH2c813gPYKKm0/editMessageText "HTTP/1.1 200 OK"
+2025-12-06 21:50:53,381 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot8307297002:AAHmvY2Ho8mL3oFNmX_YTLH2c813gPYKKm0/getUpdates "HTTP/1.1 200 OK"
+2025-12-06 21:51:04,028 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot8307297002:AAHmvY2Ho8mL3oFNmX_YTLH2c813gPYKKm0/getUpdates "HTTP/1.1 200 OK"
+2025-12-06 21:51:14,434 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot8307297002:AAHmvY2Ho8mL3oFNmX_YTLH2c813gPYKKm0/getUpdates "HTTP/1.1 200 OK"
+2025-12-06 21:51:25,743 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot8307297002:AAHmvY2Ho8mL3oFNmX_YTLH2c813gPYKKm0/getUpdates "HTTP/1.1 200 OK"
+2025-12-06 21:51:36,134 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot8307297002:AAHmvY2Ho8mL3oFNmX_YTLH2c813gPYKKm0/getUpdates "HTTP/1.1 200 OK"
+2025-12-06 21:51:46,740 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot8307297002:AAHmvY2Ho8mL3oFNmX_YTLH2c813gPYKKm0/getUpdates "HTTP/1.1 200 OK"
+2025-12-06 21:51:57,123 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot8307297002:AAHmvY2Ho8mL3oFNmX_YTLH2c813gPYKKm0/getUpdates "HTTP/1.1 200 OK"
+2025-12-06 21:52:07,835 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot8307297002:AAHmvY2Ho8mL3oFNmX_YTLH2c813gPYKKm0/getUpdates "HTTP/1.1 200 OK"
+2025-12-06 21:52:16,735 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot8307297002:AAHmvY2Ho8mL3oFNmX_YTLH2c813gPYKKm0/getUpdates "HTTP/1.1 200 OK"
+2025-12-06 21:52:16,736 - telegram.ext.Application - INFO - Application is stopping. This might take a moment.
+2025-12-06 21:52:16,736 - telegram.ext.Application - INFO - Application.stop() complete
+[2025-12-06 21:50:47] [MainThread]:【api.update_domain.success】获取到最新的API域名，替换jmcomic内置域名：(new)['www.cdnzack.cc', 'www.cdnsha.org', 'www.cdnbea.org', 'www.cdnntr.cc', 'www.cdn-mspjmapiproxy.xyz'] ---→ (old)['www.cdnaspa.vip', 'www.cdnplaystation6.vip', 'www.cdnaspa.club', 'www.cdnplaystation6.cc']
+[2025-12-06 21:50:47] [MainThread]:【api】https://www.cdnzack.cc/setting
+[2025-12-06 21:50:48] [MainThread]:【api】https://www.cdnzack.cc/album?id=1180203
+JM1180203: [高柳カツヤ] 纟を捻る [DL版] [中国翻译] by 高柳カツヤ
+  Searching E-Hentai: 高柳カツヤ
