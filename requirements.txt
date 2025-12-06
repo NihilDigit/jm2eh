@@ -1,0 +1,9 @@
+# Core dependencies for Vercel deployment
+httpx>=0.27.0
+beautifulsoup4>=4.12.0
+lxml>=5.0.0
+pykakasi>=2.3.0
+opencc-purepy>=0.1.0
+jmcomic>=2.0.0
+ehentai>=0.0.8
+curl-cffi>=0.7.0
