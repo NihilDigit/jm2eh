@@ -153,13 +153,20 @@ async def set_cookie(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     # Delete the user's message containing the cookie (security)
     try:
         await update.message.delete()
+        deleted = True
     except Exception:
-        pass  # Ignore if we can't delete
+        deleted = False
 
-    await update.message.reply_text(
-        "✅ ExHentai cookie saved!\n\n"
-        "Your searches will now use ExHentai first.\n"
-        "The cookie message has been deleted for security.",
+    # Send confirmation to the chat (not as reply since message may be deleted)
+    confirm_text = (
+        "✅ ExHentai cookie saved!\n\nYour searches will now use ExHentai first."
+    )
+    if deleted:
+        confirm_text += "\nThe cookie message has been deleted for security."
+
+    await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text=confirm_text,
         parse_mode="Markdown",
     )
 
@@ -181,11 +188,11 @@ def _normalize_cookie(raw: str) -> Optional[str]:
 
     parts = {}
 
-    # Try to extract key-value pairs with different separators
-    # Split by newlines, semicolons, or multiple spaces
-    tokens = re.split(r"[\n;]+", raw)
+    # Split by actual newlines and semicolons
+    # Note: Use explicit newline character, not \n in character class
+    lines = raw.replace(";", "\n").split("\n")
 
-    for token in tokens:
+    for token in lines:
         token = token.strip()
         if not token:
             continue
