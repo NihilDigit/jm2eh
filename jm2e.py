@@ -940,10 +940,9 @@ class JM2EConverter:
         if self.exhentai_cookie:
             print("  → Trying ExHentai (with cookie)...")
             for query, name, eng_hint in queries:
-                # Remove l:chinese filter for ExHentai queries (use same queries)
-                exh_query = query.replace(" l:chinese", "").strip()
+                # Use same query with l:chinese filter
                 link, sim = self.search_exhentai_single(
-                    exh_query, candidates, eng_hint, self.exhentai_cookie
+                    query, candidates, eng_hint, self.exhentai_cookie
                 )
                 if link:
                     return ConversionResult(
@@ -964,7 +963,7 @@ class JM2EConverter:
                     trans_words = translated.split()
                     if len(trans_words) > 4:
                         translated = " ".join(trans_words[:4])
-                    exh_query = f"{ctx.author_romaji} {translated}".strip()
+                    exh_query = f"{ctx.author_romaji} {translated} l:chinese".strip()
                     link, sim = self.search_exhentai_single(
                         exh_query, candidates, translated, self.exhentai_cookie
                     )
@@ -983,8 +982,9 @@ class JM2EConverter:
             jp_oname = ctx.jp_oname
             if jp_oname and any("\u3040" <= c <= "\u9fff" for c in jp_oname):
                 print("  → Trying Japanese title search (ExHentai)...")
+                exh_query = f"{jp_oname} l:chinese"
                 link, sim = self.search_exhentai_single(
-                    jp_oname, candidates, english_title, self.exhentai_cookie
+                    exh_query, candidates, english_title, self.exhentai_cookie
                 )
                 if link:
                     return ConversionResult(
@@ -1007,7 +1007,7 @@ class JM2EConverter:
                     print(
                         f"  → Trying extracted JP title (ExHentai): {ctx.author_jp} {jp_search}"
                     )
-                    exh_query = f"{ctx.author_jp} {jp_search}".strip()
+                    exh_query = f"{ctx.author_jp} {jp_search} l:chinese".strip()
                     link, sim = self.search_exhentai_single(
                         exh_query, candidates, english_title, self.exhentai_cookie
                     )
