@@ -394,6 +394,7 @@ def edit_message(
     text: str,
     parse_mode: str | None = None,
     disable_preview: bool = False,
+    reply_markup: dict | None = None,
 ):
     """Edit an existing message."""
     payload = {"chat_id": chat_id, "message_id": message_id, "text": text}
@@ -401,6 +402,8 @@ def edit_message(
         payload["parse_mode"] = parse_mode
     if disable_preview:
         payload["disable_web_page_preview"] = True
+    if reply_markup:
+        payload["reply_markup"] = reply_markup
 
     try:
         with httpx.Client(timeout=10) as client:
@@ -412,16 +415,12 @@ def edit_message(
         pass  # Fall back to sending new message if edit fails
 
 
-def escape_markdown(text: str) -> str:
-    """Escape special characters for Telegram Markdown.
+def escape_html(text: str) -> str:
+    """Escape special characters for Telegram HTML.
 
-    Characters that need escaping: _ * [ ] ( ) ~ ` > # + - = | { } . !
+    Characters that need escaping: < > &
     """
-    # For basic Markdown mode, we mainly need to escape: _ * ` [
-    special_chars = ["_", "*", "`", "[", "]", "(", ")"]
-    for char in special_chars:
-        text = text.replace(char, f"\\{char}")
-    return text
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
 def normalize_cookie(raw: str) -> Optional[str]:
@@ -816,17 +815,17 @@ def handle_message(message: dict):
                 "wnacg": "绅士漫画",
             }.get(result.source, result.source)
 
-            # Escape markdown special chars in title/author
+            # Escape HTML special chars in title/author
             title_raw = result.title[:80] + ("..." if len(result.title) > 80 else "")
-            title_display = escape_markdown(title_raw)
-            author_display = escape_markdown(result.author)
+            title_display = escape_html(title_raw)
+            author_display = escape_html(result.author)
 
+            # Use HTML format - no complex escaping needed
             response = (
-                f"{source_emoji} *JM{jm_id}*\n\n"
+                f"{source_emoji} <b>JM{jm_id}</b>\n\n"
                 f"📚 {title_display}\n"
                 f"✍️ {author_display}\n"
-                f"🔗 {source_name}\n\n"
-                f"[👉 打开链接]({result.link})"
+                f"🔗 {source_name}"
             )
 
             # Create inline keyboard with useful buttons
@@ -842,26 +841,21 @@ def handle_message(message: dict):
                 ]
             }
 
-            # Edit the status message with the result
+            # Edit the status message with the result and buttons
             if status_msg_id:
                 edit_message(
                     chat_id,
                     status_msg_id,
                     response,
-                    parse_mode="Markdown",
+                    parse_mode="HTML",
                     disable_preview=True,
-                )
-                # Send new message with buttons (can't add buttons via edit easily)
-                send_message(
-                    chat_id,
-                    "⬆️ 点击按钮快速访问",
                     reply_markup=inline_keyboard,
                 )
             else:
                 send_message(
                     chat_id,
                     response,
-                    parse_mode="Markdown",
+                    parse_mode="HTML",
                     disable_preview=True,
                     reply_to_message_id=message_id,
                     reply_markup=inline_keyboard,
@@ -871,11 +865,12 @@ def handle_message(message: dict):
             set_message_reaction(chat_id, message_id, "😢")
 
             title_raw = result.title[:80] + ("..." if len(result.title) > 80 else "")
-            title_display = escape_markdown(title_raw)
-            author_display = escape_markdown(result.author)
+            title_display = escape_html(title_raw)
+            author_display = escape_html(result.author)
 
+            # Use HTML format
             response = (
-                f"❌ *JM{jm_id}*\n\n"
+                f"❌ <b>JM{jm_id}</b>\n\n"
                 f"📚 {title_display}\n"
                 f"✍️ {author_display}\n\n"
                 "未找到匹配的画廊。"
@@ -905,14 +900,15 @@ def handle_message(message: dict):
                     chat_id,
                     status_msg_id,
                     response,
-                    parse_mode="Markdown",
+                    parse_mode="HTML",
                     disable_preview=True,
+                    reply_markup=inline_keyboard,
                 )
             else:
                 send_message(
                     chat_id,
                     response,
-                    parse_mode="Markdown",
+                    parse_mode="HTML",
                     disable_preview=True,
                     reply_to_message_id=message_id,
                     reply_markup=inline_keyboard,
@@ -969,10 +965,10 @@ def handle_inline_query(inline_query: dict):
                 title_raw = result.title[:60] + (
                     "..." if len(result.title) > 60 else ""
                 )
-                title_display = escape_markdown(title_raw)
-                author_display = escape_markdown(result.author)
+                title_display = escape_html(title_raw)
+                author_display = escape_html(result.author)
 
-                # Create article result
+                # Create article result (use HTML format)
                 results.append(
                     {
                         "type": "article",
@@ -981,13 +977,12 @@ def handle_inline_query(inline_query: dict):
                         "description": f"{title_raw} - {result.author}",
                         "input_message_content": {
                             "message_text": (
-                                f"{source_emoji} *JM{jm_id}*\n\n"
+                                f"{source_emoji} <b>JM{jm_id}</b>\n\n"
                                 f"📚 {title_display}\n"
                                 f"✍️ {author_display}\n"
-                                f"🔗 {source_name}\n\n"
-                                f"[👉 打开链接]({result.link})"
+                                f"🔗 {source_name}"
                             ),
-                            "parse_mode": "Markdown",
+                            "parse_mode": "HTML",
                             "disable_web_page_preview": True,
                         },
                         "reply_markup": {
@@ -1008,8 +1003,8 @@ def handle_inline_query(inline_query: dict):
                 title_raw = result.title[:60] + (
                     "..." if len(result.title) > 60 else ""
                 )
-                title_display = escape_markdown(title_raw)
-                author_display = escape_markdown(result.author)
+                title_display = escape_html(title_raw)
+                author_display = escape_html(result.author)
 
                 results.append(
                     {
@@ -1019,12 +1014,12 @@ def handle_inline_query(inline_query: dict):
                         "description": f"{title_raw} - 无匹配画廊",
                         "input_message_content": {
                             "message_text": (
-                                f"❌ *JM{jm_id}*\n\n"
+                                f"❌ <b>JM{jm_id}</b>\n\n"
                                 f"📚 {title_display}\n"
                                 f"✍️ {author_display}\n\n"
                                 "未找到匹配的画廊。"
                             ),
-                            "parse_mode": "Markdown",
+                            "parse_mode": "HTML",
                         },
                     }
                 )
@@ -1050,11 +1045,11 @@ def handle_inline_query(inline_query: dict):
                 "description": "例如: 540930 或 jm540930",
                 "input_message_content": {
                     "message_text": (
-                        "🔗 *JM2E Bot*\n\n"
-                        "使用方法: `@jm2eh_bot <JM ID>`\n"
-                        "例如: `@jm2eh_bot 540930`"
+                        "🔗 <b>JM2E Bot</b>\n\n"
+                        "使用方法: <code>@jm2eh_bot &lt;JM ID&gt;</code>\n"
+                        "例如: <code>@jm2eh_bot 540930</code>"
                     ),
-                    "parse_mode": "Markdown",
+                    "parse_mode": "HTML",
                 },
             }
         )
