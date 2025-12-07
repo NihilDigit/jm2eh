@@ -215,9 +215,9 @@ def get_user_cookie(user_id: int) -> Optional[str]:
 
     # Try to load from KV if user has persistence enabled
     if kv_available():
-        persist = kv_get(f"user:{user_id}:persist")
+        persist = kv_get(f"user_{user_id}_persist")
         if persist == "1":
-            cookie = kv_get(f"user:{user_id}:cookie")
+            cookie = kv_get(f"user_{user_id}_cookie")
             if cookie:
                 _user_cookies[user_id] = cookie
                 _user_persist[user_id] = True
@@ -232,7 +232,7 @@ def set_user_cookie(user_id: int, cookie: str) -> None:
 
     # If user has persistence enabled, save to KV
     if _user_persist.get(user_id) and kv_available():
-        kv_set(f"user:{user_id}:cookie", cookie)
+        kv_set(f"user_{user_id}_cookie", cookie)
 
 
 def delete_user_cookie(user_id: int) -> None:
@@ -242,7 +242,7 @@ def delete_user_cookie(user_id: int) -> None:
 
     # Also delete from KV if available
     if kv_available():
-        kv_delete(f"user:{user_id}:cookie")
+        kv_delete(f"user_{user_id}_cookie")
 
 
 def get_user_persist(user_id: int) -> bool:
@@ -251,7 +251,7 @@ def get_user_persist(user_id: int) -> bool:
         return _user_persist[user_id]
 
     if kv_available():
-        persist = kv_get(f"user:{user_id}:persist")
+        persist = kv_get(f"user_{user_id}_persist")
         result = persist == "1"
         _user_persist[user_id] = result
         return result
@@ -273,7 +273,7 @@ def set_user_persist(user_id: int, enabled: bool) -> bool:
     if enabled:
         # Write persist flag and check result
         print(f"[Persist] Writing persist flag for user {user_id}")
-        persist_ok = kv_set(f"user:{user_id}:persist", "1")
+        persist_ok = kv_set(f"user_{user_id}_persist", "1")
         print(f"[Persist] persist_ok = {persist_ok}")
         if not persist_ok:
             print(f"[Persist] Failed to write persist flag for user {user_id}")
@@ -281,7 +281,7 @@ def set_user_persist(user_id: int, enabled: bool) -> bool:
         # Also persist current cookie if exists
         print(f"[Persist] user_id in _user_cookies = {user_id in _user_cookies}")
         if user_id in _user_cookies:
-            cookie_ok = kv_set(f"user:{user_id}:cookie", _user_cookies[user_id])
+            cookie_ok = kv_set(f"user_{user_id}_cookie", _user_cookies[user_id])
             print(f"[Persist] cookie_ok = {cookie_ok}")
             if not cookie_ok:
                 print(f"[Persist] Failed to write cookie for user {user_id}")
@@ -291,8 +291,8 @@ def set_user_persist(user_id: int, enabled: bool) -> bool:
                 f"[Persist] No cookie in memory for user {user_id}, skipping cookie write"
             )
     else:
-        kv_delete(f"user:{user_id}:persist")
-        kv_delete(f"user:{user_id}:cookie")
+        kv_delete(f"user_{user_id}_persist")
+        kv_delete(f"user_{user_id}_cookie")
 
     print(f"[Persist] Success for user {user_id}")
     return True
@@ -306,8 +306,8 @@ def delete_all_user_data(user_id: int) -> None:
         del _user_persist[user_id]
 
     if kv_available():
-        kv_delete(f"user:{user_id}:cookie")
-        kv_delete(f"user:{user_id}:persist")
+        kv_delete(f"user_{user_id}_cookie")
+        kv_delete(f"user_{user_id}_persist")
 
 
 def get_converter(exhentai_cookie: Optional[str] = None) -> JM2EConverter:
