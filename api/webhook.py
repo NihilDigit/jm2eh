@@ -1117,6 +1117,21 @@ class handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         """Health check endpoint."""
+        # Parse query string for test commands
+        query = ""
+        if "?" in self.path:
+            query = self.path.split("?")[1]
+
+        # Test write to Edge Config
+        if query == "test_write":
+            result = _edge_config_write({"debug_test": "hello_from_bot"})
+            response = {"test_write": result}
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(response).encode())
+            return
+
         # Debug: show env vars status (partial values for security)
         env_status = {
             "EDGE_CONFIG": EDGE_CONFIG[:50] + "..."
