@@ -19,13 +19,176 @@ from jm2e import JM2EConverter
 TELEGRAM_API = "https://api.telegram.org"
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
 
+# Vercel KV configuration (for persistent storage)
+KV_REST_API_URL = os.environ.get("KV_REST_API_URL", "")
+KV_REST_API_TOKEN = os.environ.get("KV_REST_API_TOKEN", "")
+
 # Lazy-init converters (reused across warm invocations)
 # Key: cookie hash, Value: converter instance
 _converters: dict[str, JM2EConverter] = {}
 
-# User cookie storage (in-memory, resets on cold start)
-# For persistence, consider using a database or Vercel KV
+# User cookie storage (in-memory cache, may reset on cold start)
 _user_cookies: dict[int, str] = {}
+
+# User persistence preference (in-memory cache)
+_user_persist: dict[int, bool] = {}
+
+
+# ============== Vercel KV Helper Functions ==============
+
+
+def kv_available() -> bool:
+    """Check if Vercel KV is configured."""
+    return bool(KV_REST_API_URL and KV_REST_API_TOKEN)
+
+
+def kv_get(key: str) -> Optional[str]:
+    """Get value from Vercel KV."""
+    if not kv_available():
+        return None
+
+    try:
+        with httpx.Client(timeout=5) as client:
+            resp = client.get(
+                f"{KV_REST_API_URL}/get/{key}",
+                headers={"Authorization": f"Bearer {KV_REST_API_TOKEN}"},
+            )
+            data = resp.json()
+            result = data.get("result")
+            return result if result else None
+    except Exception:
+        return None
+
+
+def kv_set(key: str, value: str, ex: int | None = None) -> bool:
+    """Set value in Vercel KV.
+
+    Args:
+        key: The key to set
+        value: The value to store
+        ex: Optional expiration time in seconds
+    """
+    if not kv_available():
+        return False
+
+    try:
+        url = f"{KV_REST_API_URL}/set/{key}/{value}"
+        if ex:
+            url += f"?ex={ex}"
+
+        with httpx.Client(timeout=5) as client:
+            resp = client.get(
+                url,
+                headers={"Authorization": f"Bearer {KV_REST_API_TOKEN}"},
+            )
+            return resp.status_code == 200
+    except Exception:
+        return False
+
+
+def kv_delete(key: str) -> bool:
+    """Delete key from Vercel KV."""
+    if not kv_available():
+        return False
+
+    try:
+        with httpx.Client(timeout=5) as client:
+            resp = client.get(
+                f"{KV_REST_API_URL}/del/{key}",
+                headers={"Authorization": f"Bearer {KV_REST_API_TOKEN}"},
+            )
+            return resp.status_code == 200
+    except Exception:
+        return False
+
+
+# ============== User Data Management ==============
+
+
+def get_user_cookie(user_id: int) -> Optional[str]:
+    """Get user's ExHentai cookie (from cache or KV)."""
+    # Check in-memory cache first
+    if user_id in _user_cookies:
+        return _user_cookies[user_id]
+
+    # Try to load from KV if user has persistence enabled
+    if kv_available():
+        persist = kv_get(f"user:{user_id}:persist")
+        if persist == "1":
+            cookie = kv_get(f"user:{user_id}:cookie")
+            if cookie:
+                _user_cookies[user_id] = cookie
+                _user_persist[user_id] = True
+                return cookie
+
+    return None
+
+
+def set_user_cookie(user_id: int, cookie: str) -> None:
+    """Set user's ExHentai cookie."""
+    _user_cookies[user_id] = cookie
+
+    # If user has persistence enabled, save to KV
+    if _user_persist.get(user_id) and kv_available():
+        kv_set(f"user:{user_id}:cookie", cookie)
+
+
+def delete_user_cookie(user_id: int) -> None:
+    """Delete user's ExHentai cookie."""
+    if user_id in _user_cookies:
+        del _user_cookies[user_id]
+
+    # Also delete from KV if available
+    if kv_available():
+        kv_delete(f"user:{user_id}:cookie")
+
+
+def get_user_persist(user_id: int) -> bool:
+    """Check if user has persistence enabled."""
+    if user_id in _user_persist:
+        return _user_persist[user_id]
+
+    if kv_available():
+        persist = kv_get(f"user:{user_id}:persist")
+        result = persist == "1"
+        _user_persist[user_id] = result
+        return result
+
+    return False
+
+
+def set_user_persist(user_id: int, enabled: bool) -> bool:
+    """Enable or disable persistence for user.
+
+    Returns True if successful.
+    """
+    if not kv_available():
+        return False
+
+    _user_persist[user_id] = enabled
+
+    if enabled:
+        kv_set(f"user:{user_id}:persist", "1")
+        # Also persist current cookie if exists
+        if user_id in _user_cookies:
+            kv_set(f"user:{user_id}:cookie", _user_cookies[user_id])
+    else:
+        kv_delete(f"user:{user_id}:persist")
+        kv_delete(f"user:{user_id}:cookie")
+
+    return True
+
+
+def delete_all_user_data(user_id: int) -> None:
+    """Delete all user data (cookie + persistence setting)."""
+    if user_id in _user_cookies:
+        del _user_cookies[user_id]
+    if user_id in _user_persist:
+        del _user_persist[user_id]
+
+    if kv_available():
+        kv_delete(f"user:{user_id}:cookie")
+        kv_delete(f"user:{user_id}:persist")
 
 
 def get_converter(exhentai_cookie: Optional[str] = None) -> JM2EConverter:
@@ -273,78 +436,154 @@ def handle_message(message: dict):
     if not chat_id or not text:
         return
 
-    # Get user's ExHentai cookie if set
-    user_cookie = _user_cookies.get(user_id)
+    # Get user's ExHentai cookie if set (from cache or KV)
+    user_cookie = get_user_cookie(user_id)
+    user_has_persist = get_user_persist(user_id)
 
     # Handle /start command
     if text == "/start":
-        cookie_status = (
-            "✅ ExHentai cookie set" if user_cookie else "❌ No ExHentai cookie"
-        )
+        cookie_status = "✅ 已设置" if user_cookie else "❌ 未设置"
+        persist_status = "☁️ 云端" if user_has_persist else "💾 本地"
         send_message(
             chat_id,
-            f"🔗 *JM2E Bot* - JMComic to E-Hentai/ExHentai Converter\n\n"
-            f"Send me a JMComic ID and I'll find the link for you!\n\n"
-            f"*Status:* {cookie_status}\n\n"
-            f"*Example:* `540930` or `/jm 540930`\n\n"
-            f"*Search priority:*\n"
-            f"1. ExHentai (if cookie set)\n"
-            f"2. E-Hentai\n"
-            f"3. wnacg\n\n"
-            f"Use `/setcookie` to enable ExHentai search.",
-            parse_mode="Markdown",
+            f"🔗 *JM2E Bot* \\- JMComic to E\\-Hentai/ExHentai\n\n"
+            f"发送 JMComic ID 即可查询链接\\!\n\n"
+            f"*当前状态:*\n"
+            f"• Cookie: {cookie_status}\n"
+            f"• 存储: {persist_status}\n\n"
+            f"*示例:* `540930` 或 `/jm 540930`\n\n"
+            f"*搜索顺序:*\n"
+            f"1\\. ExHentai \\(需设置cookie\\)\n"
+            f"2\\. E\\-Hentai\n"
+            f"3\\. wnacg\n\n"
+            f"使用 `/help` 查看所有命令",
+            parse_mode="MarkdownV2",
         )
         return
 
     # Handle /help command
     if text == "/help":
+        cloud_cmds = (
+            "\n*云端存储:*\n"
+            "/persist \\- 启用云端存储 \\(cookie不丢失\\)\n"
+            "/forget \\- 删除所有云端数据\n"
+            if kv_available()
+            else ""
+        )
         send_message(
             chat_id,
-            "📖 *How to use JM2E Bot*\n\n"
-            "*Basic usage:*\n"
-            "• Send a JMComic ID: `540930`\n"
-            "• Or use command: `/jm 540930`\n"
-            "• Or paste a JMComic link\n\n"
-            "*Commands:*\n"
-            "/start - Start the bot\n"
-            "/help - Show this help\n"
-            "/jm <id> - Convert JMComic ID\n"
-            "/setcookie - Set ExHentai cookie\n"
-            "/clearcookie - Remove cookie\n"
-            "/status - Check settings\n\n"
-            "*ExHentai Cookie:*\n"
-            "Just paste your cookie directly, or use:\n"
-            "`/setcookie ipb_member_id=xxx; ipb_pass_hash=xxx`",
-            parse_mode="Markdown",
+            "📖 *JM2E Bot 使用帮助*\n\n"
+            "*基本用法:*\n"
+            "• 直接发送ID: `540930`\n"
+            "• 使用命令: `/jm 540930`\n"
+            "• 粘贴JMComic链接\n\n"
+            "*命令列表:*\n"
+            "/start \\- 开始使用\n"
+            "/help \\- 显示帮助\n"
+            "/jm \\<id\\> \\- 转换JM ID\n"
+            "/setcookie \\- 设置ExHentai cookie\n"
+            "/clearcookie \\- 清除cookie\n"
+            "/status \\- 查看当前状态\n"
+            f"{cloud_cmds}\n"
+            "*设置Cookie:*\n"
+            "直接粘贴cookie，或使用:\n"
+            "`/setcookie ipb\\_member\\_id=xxx; ipb\\_pass\\_hash=xxx`",
+            parse_mode="MarkdownV2",
         )
         return
 
     # Handle /status command
     if text == "/status":
-        cookie_status = "✅ Set" if user_cookie else "❌ Not set"
+        cookie_status = "✅ 已设置" if user_cookie else "❌ 未设置"
         search_order = "ExHentai → wnacg" if user_cookie else "E-Hentai → wnacg"
+
+        if kv_available():
+            persist_status = "☁️ 已启用" if user_has_persist else "💾 仅本地"
+            persist_hint = (
+                "\\(cookie已云端保存\\)"
+                if user_has_persist
+                else "\\(重启后可能丢失，用 /persist 启用云端存储\\)"
+            )
+        else:
+            persist_status = "⚠️ 不可用"
+            persist_hint = "\\(服务器未配置云存储\\)"
+
         send_message(
             chat_id,
-            f"📊 *Current Settings*\n\n"
-            f"ExHentai cookie: {cookie_status}\n"
-            f"Search priority: {search_order}",
-            parse_mode="Markdown",
+            f"📊 *当前设置*\n\n"
+            f"ExHentai Cookie: {cookie_status}\n"
+            f"搜索顺序: {search_order}\n"
+            f"云端存储: {persist_status}\n"
+            f"{persist_hint}",
+            parse_mode="MarkdownV2",
+        )
+        return
+
+    # Handle /persist command (enable cloud storage)
+    if text == "/persist":
+        if not kv_available():
+            send_message(
+                chat_id,
+                "⚠️ 云端存储不可用\n\n服务器未配置 Vercel KV。",
+            )
+            return
+
+        if user_has_persist:
+            send_message(
+                chat_id,
+                "☁️ 云端存储已启用\n\n你的cookie已在云端保存，重启不会丢失。",
+            )
+            return
+
+        if not user_cookie:
+            send_message(
+                chat_id,
+                "❌ 请先设置cookie\n\n使用 /setcookie 设置后再启用云端存储。",
+            )
+            return
+
+        if set_user_persist(user_id, True):
+            send_message(
+                chat_id,
+                "✅ 云端存储已启用\\!\n\n"
+                "你的cookie已保存到云端，即使服务器重启也不会丢失。\n\n"
+                "使用 /forget 可随时删除云端数据。",
+                parse_mode="MarkdownV2",
+            )
+        else:
+            send_message(chat_id, "❌ 启用失败，请稍后重试。")
+        return
+
+    # Handle /forget command (delete all cloud data)
+    if text == "/forget":
+        if not kv_available():
+            send_message(
+                chat_id,
+                "⚠️ 云端存储不可用",
+            )
+            return
+
+        delete_all_user_data(user_id)
+        send_message(
+            chat_id,
+            "🗑️ 已删除所有数据\n\n"
+            "• 云端cookie已删除\n"
+            "• 云端存储已禁用\n"
+            "• 本地缓存已清除\n\n"
+            "如需继续使用ExHentai，请重新设置cookie。",
         )
         return
 
     # Handle /clearcookie command
     if text == "/clearcookie":
-        if user_id in _user_cookies:
-            del _user_cookies[user_id]
+        if user_cookie:
+            delete_user_cookie(user_id)
             send_message(
                 chat_id,
-                "🗑️ ExHentai cookie cleared.\n\nSearches will now use E-Hentai.",
-                parse_mode="Markdown",
+                "🗑️ Cookie已清除\n\n搜索将使用E-Hentai。",
             )
         else:
-            send_message(
-                chat_id, "ℹ️ No ExHentai cookie was set.", parse_mode="Markdown"
-            )
+            send_message(chat_id, "ℹ️ 未设置cookie。")
         return
 
     # Handle /setcookie command or direct cookie paste
@@ -413,13 +652,18 @@ def handle_message(message: dict):
         send_message(chat_id, "🔄 正在验证cookie...")
 
         if verify_exhentai_cookie(cookie):
-            _user_cookies[user_id] = cookie
+            set_user_cookie(user_id, cookie)
+
+            # Suggest enabling cloud storage
+            persist_hint = ""
+            if kv_available() and not user_has_persist:
+                persist_hint = "\n\n💡 使用 /persist 可启用云端存储，重启不丢失。"
+
             send_message(
                 chat_id,
-                "✅ Cookie验证成功!\n\n"
-                "搜索将优先使用ExHentai。\n"
-                "为安全起见，您的cookie消息已删除。",
-                parse_mode="Markdown",
+                f"✅ Cookie验证成功!\n\n"
+                f"搜索将优先使用ExHentai。\n"
+                f"为安全起见，您的cookie消息已删除。{persist_hint}",
             )
         else:
             send_message(
@@ -430,7 +674,6 @@ def handle_message(message: dict):
                 "• Cookie格式错误\n"
                 "• 账号被封禁\n\n"
                 "请重新从浏览器获取cookie。",
-                parse_mode="Markdown",
             )
         return
 
