@@ -40,6 +40,9 @@ _user_cookies: dict[int, str] = {}
 # User persistence preference (in-memory cache)
 _user_persist: dict[int, bool] = {}
 
+# User blur preference (in-memory cache, default True = blur enabled)
+_user_blur: dict[int, bool] = {}
+
 
 # ============== Storage Helper Functions (Edge Config / KV) ==============
 
@@ -280,15 +283,42 @@ def set_user_persist(user_id: int, enabled: bool) -> bool:
 
 
 def delete_all_user_data(user_id: int) -> None:
-    """Delete all user data (cookie + persistence setting)."""
+    """Delete all user data (cookie + persistence setting + blur setting)."""
     if user_id in _user_cookies:
         del _user_cookies[user_id]
     if user_id in _user_persist:
         del _user_persist[user_id]
+    if user_id in _user_blur:
+        del _user_blur[user_id]
 
     if kv_available():
         kv_delete(f"user_{user_id}_cookie")
         kv_delete(f"user_{user_id}_persist")
+        kv_delete(f"user_{user_id}_blur")
+
+
+def get_user_blur(user_id: int) -> bool:
+    """Get user's blur preference. Default is True (blur enabled)."""
+    if user_id in _user_blur:
+        return _user_blur[user_id]
+
+    if kv_available():
+        blur = kv_get(f"user_{user_id}_blur")
+        if blur is not None:
+            result = blur != "0"  # "0" means disabled
+            _user_blur[user_id] = result
+            return result
+
+    return True  # Default: blur enabled
+
+
+def set_user_blur(user_id: int, enabled: bool) -> None:
+    """Set user's blur preference."""
+    _user_blur[user_id] = enabled
+
+    # If user has persistence enabled, save to KV
+    if _user_persist.get(user_id) and kv_available():
+        kv_set(f"user_{user_id}_blur", "1" if enabled else "0")
 
 
 def get_converter(exhentai_cookie: Optional[str] = None) -> JM2EConverter:
@@ -357,6 +387,7 @@ def set_my_commands():
         {"command": "jm", "description": "转换 JM ID (例: /jm 540930)"},
         {"command": "setcookie", "description": "设置 ExHentai Cookie"},
         {"command": "status", "description": "查看当前状态"},
+        {"command": "blur", "description": "切换封面模糊"},
         {"command": "persist", "description": "启用云端存储"},
         {"command": "forget", "description": "删除所有数据"},
         {"command": "help", "description": "显示帮助信息"},
@@ -451,6 +482,7 @@ def send_photo(
     parse_mode: str | None = None,
     reply_to_message_id: int | None = None,
     reply_markup: dict | None = None,
+    has_spoiler: bool = False,
 ) -> int | None:
     """Send photo via Telegram API.
 
@@ -461,6 +493,7 @@ def send_photo(
         parse_mode: Optional parse mode (HTML, Markdown, etc.)
         reply_to_message_id: Optional message to reply to
         reply_markup: Optional inline keyboard
+        has_spoiler: If True, photo will be blurred until user clicks
 
     Returns the message_id of the sent message, or None on failure.
     """
@@ -473,6 +506,8 @@ def send_photo(
         payload["reply_to_message_id"] = reply_to_message_id
     if reply_markup:
         payload["reply_markup"] = reply_markup
+    if has_spoiler:
+        payload["has_spoiler"] = True
 
     try:
         with httpx.Client(timeout=15) as client:
@@ -730,6 +765,8 @@ def handle_message(message: dict):
     if text == "/status":
         cookie_status = "✅ 已设置" if user_cookie else "❌ 未设置"
         search_order = "ExHentai → wnacg" if user_cookie else "E-Hentai → wnacg"
+        blur_enabled = get_user_blur(user_id)
+        blur_status = "🔒 已开启" if blur_enabled else "🔓 已关闭"
 
         if kv_available():
             persist_status = "☁️ 已启用" if user_has_persist else "💾 仅本地"
@@ -743,6 +780,7 @@ def handle_message(message: dict):
             f"📊 <b>当前状态</b>\n\n"
             f"🍪 Cookie: {cookie_status}\n"
             f"🔍 搜索顺序: {search_order}\n"
+            f"🖼️ 封面模糊: {blur_status}\n"
             f"☁️ 云端存储: {persist_status} {persist_hint}",
             parse_mode="HTML",
             reply_markup={
@@ -756,6 +794,26 @@ def handle_message(message: dict):
             if not user_cookie and not user_has_persist
             else None,
         )
+        return
+
+    # Handle /blur command (toggle cover blur)
+    if text == "/blur":
+        blur_enabled = get_user_blur(user_id)
+        new_blur = not blur_enabled
+        set_user_blur(user_id, new_blur)
+
+        if new_blur:
+            send_message(
+                chat_id,
+                "🔒 封面模糊已<b>开启</b>\n\n点击图片可查看原图。",
+                parse_mode="HTML",
+            )
+        else:
+            send_message(
+                chat_id,
+                "🔓 封面模糊已<b>关闭</b>\n\n封面将直接显示。",
+                parse_mode="HTML",
+            )
         return
 
     # Handle /persist command (enable cloud storage)
@@ -979,6 +1037,7 @@ def handle_message(message: dict):
             # Try to send with cover image if available
             photo_sent = False
             if result.cover_url:
+                blur_enabled = get_user_blur(user_id)
                 photo_msg_id = send_photo(
                     chat_id,
                     result.cover_url,
@@ -986,6 +1045,7 @@ def handle_message(message: dict):
                     parse_mode="HTML",
                     reply_to_message_id=message_id,
                     reply_markup=inline_keyboard,
+                    has_spoiler=blur_enabled,
                 )
                 photo_sent = photo_msg_id is not None
 
@@ -1041,6 +1101,7 @@ def handle_message(message: dict):
             # Try to send with cover image if available
             photo_sent = False
             if result.cover_url:
+                blur_enabled = get_user_blur(user_id)
                 photo_msg_id = send_photo(
                     chat_id,
                     result.cover_url,
@@ -1048,6 +1109,7 @@ def handle_message(message: dict):
                     parse_mode="HTML",
                     reply_to_message_id=message_id,
                     reply_markup=inline_keyboard,
+                    has_spoiler=blur_enabled,
                 )
                 photo_sent = photo_msg_id is not None
 
