@@ -88,3 +88,7 @@ pixi run python bot.py
 ## License
 
 MIT
+
+## Disclaimer
+
+This project is for educational and research purposes only. Users are responsible for ensuring their use complies with applicable laws and the terms of service of any third-party websites. The authors do not endorse or encourage copyright infringement.
