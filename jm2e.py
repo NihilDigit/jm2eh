@@ -32,6 +32,9 @@ from ehentai import get_search
 # Similarity threshold for matching
 SIMILARITY_THRESHOLD = 0.55
 
+# JMComic cover image CDN base URL
+JM_COVER_CDN = "https://cdn-msp.18comic.vip/media/albums"
+
 # Initialize converters (module-level singletons)
 _s2t = opencc.OpenCC("s2t")
 _t2jp = opencc.OpenCC("t2jp")
@@ -353,6 +356,7 @@ class ConversionResult:
     link: str
     source: str  # 'exhentai', 'ehentai', 'wnacg', 'none'
     similarity: float = 0.0
+    cover_url: str = ""
 
     def __str__(self):
         return f"[{self.source.upper()}] {self.link}"
@@ -436,12 +440,16 @@ class JM2EConverter:
         if english_from_title and english_from_title not in candidates:
             candidates.append(english_from_title)
 
+        # Build cover image URL
+        cover_url = f"{JM_COVER_CDN}/{jm_id}_3x4.jpg"
+
         return {
             "title": album.title,
             "author": album.author,
             "oname": oname,
             "candidates": candidates,
             "description": description,
+            "cover_url": cover_url,
         }
 
     def _extract_english_from_title(self, title: str) -> Optional[str]:
@@ -862,6 +870,7 @@ class JM2EConverter:
         oname = info["oname"]
         candidates = info["candidates"]
         description = info.get("description", "")
+        cover_url = info.get("cover_url", "")
 
         print(f"JM{jm_id}: {title}")
 
@@ -944,6 +953,7 @@ class JM2EConverter:
                         link=link,
                         source="exhentai",
                         similarity=sim,
+                        cover_url=cover_url,
                     )
 
             # Additional ExHentai queries (translation, JP title) if initial queries failed
@@ -966,6 +976,7 @@ class JM2EConverter:
                             link=link,
                             source="exhentai",
                             similarity=sim,
+                            cover_url=cover_url,
                         )
 
             # Japanese title direct search on ExHentai
@@ -983,6 +994,7 @@ class JM2EConverter:
                         link=link,
                         source="exhentai",
                         similarity=sim,
+                        cover_url=cover_url,
                     )
 
             # Extracted JP title on ExHentai
@@ -1007,6 +1019,7 @@ class JM2EConverter:
                             link=link,
                             source="exhentai",
                             similarity=sim,
+                            cover_url=cover_url,
                         )
 
             # Skip E-Hentai, go directly to wnacg
@@ -1015,7 +1028,7 @@ class JM2EConverter:
             if concurrent and len(queries) >= 2:
                 # Run first batch of queries concurrently
                 result = self._search_concurrent(
-                    queries, candidates, ctx, jm_id, title, author
+                    queries, candidates, ctx, jm_id, title, author, cover_url
                 )
                 if result:
                     return result
@@ -1031,6 +1044,7 @@ class JM2EConverter:
                             link=link,
                             source="ehentai",
                             similarity=sim,
+                            cover_url=cover_url,
                         )
 
             # --- Query 3: English translation (SimplyTranslate) ---
@@ -1053,6 +1067,7 @@ class JM2EConverter:
                             link=link,
                             source="ehentai",
                             similarity=sim,
+                            cover_url=cover_url,
                         )
 
             # --- Query 3b: Japanese title direct search ---
@@ -1071,6 +1086,7 @@ class JM2EConverter:
                         link=link,
                         source="ehentai",
                         similarity=sim,
+                        cover_url=cover_url,
                     )
 
             # --- Query 3c: Extract Japanese title from full title ---
@@ -1093,6 +1109,7 @@ class JM2EConverter:
                             link=link,
                             source="ehentai",
                             similarity=sim,
+                            cover_url=cover_url,
                         )
 
         # --- Query 4: wnacg ---
@@ -1108,6 +1125,7 @@ class JM2EConverter:
                 link=link,
                 source="wnacg",
                 similarity=sim,
+                cover_url=cover_url,
             )
 
         # No match found
@@ -1118,6 +1136,7 @@ class JM2EConverter:
             link="",
             source="none",
             similarity=0.0,
+            cover_url=cover_url,
         )
 
     def _search_concurrent(
@@ -1128,6 +1147,7 @@ class JM2EConverter:
         jm_id: str,
         title: str,
         author: str,
+        cover_url: str = "",
     ) -> Optional[ConversionResult]:
         """Run multiple E-Hentai searches concurrently.
 
@@ -1162,6 +1182,7 @@ class JM2EConverter:
                         link=link,
                         source="ehentai",
                         similarity=sim,
+                        cover_url=cover_url,
                     )
 
         # Check results in priority order
@@ -1176,6 +1197,7 @@ class JM2EConverter:
                         link=link,
                         source="ehentai",
                         similarity=sim,
+                        cover_url=cover_url,
                     )
 
         return None

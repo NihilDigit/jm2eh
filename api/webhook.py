@@ -445,6 +445,83 @@ def edit_message(
         pass  # Fall back to sending new message if edit fails
 
 
+def send_photo(
+    chat_id: int,
+    photo_url: str,
+    caption: str | None = None,
+    parse_mode: str | None = None,
+    reply_to_message_id: int | None = None,
+    reply_markup: dict | None = None,
+) -> int | None:
+    """Send photo via Telegram API.
+
+    Args:
+        chat_id: Chat to send to
+        photo_url: URL of the photo to send
+        caption: Optional caption for the photo
+        parse_mode: Optional parse mode (HTML, Markdown, etc.)
+        reply_to_message_id: Optional message to reply to
+        reply_markup: Optional inline keyboard
+
+    Returns the message_id of the sent message, or None on failure.
+    """
+    payload = {"chat_id": chat_id, "photo": photo_url}
+    if caption:
+        payload["caption"] = caption
+    if parse_mode:
+        payload["parse_mode"] = parse_mode
+    if reply_to_message_id:
+        payload["reply_to_message_id"] = reply_to_message_id
+    if reply_markup:
+        payload["reply_markup"] = reply_markup
+
+    try:
+        with httpx.Client(timeout=15) as client:
+            resp = client.post(
+                f"{TELEGRAM_API}/bot{TELEGRAM_TOKEN}/sendPhoto",
+                json=payload,
+            )
+            data = resp.json()
+            if data.get("ok"):
+                return data.get("result", {}).get("message_id")
+    except Exception:
+        pass
+    return None
+
+
+def edit_message_media(
+    chat_id: int,
+    message_id: int,
+    photo_url: str,
+    caption: str | None = None,
+    parse_mode: str | None = None,
+    reply_markup: dict | None = None,
+) -> bool:
+    """Edit an existing message to show a photo with caption.
+
+    Returns True if successful.
+    """
+    media = {"type": "photo", "media": photo_url}
+    if caption:
+        media["caption"] = caption
+    if parse_mode:
+        media["parse_mode"] = parse_mode
+
+    payload = {"chat_id": chat_id, "message_id": message_id, "media": media}
+    if reply_markup:
+        payload["reply_markup"] = reply_markup
+
+    try:
+        with httpx.Client(timeout=15) as client:
+            resp = client.post(
+                f"{TELEGRAM_API}/bot{TELEGRAM_TOKEN}/editMessageMedia",
+                json=payload,
+            )
+            return resp.json().get("ok", False)
+    except Exception:
+        return False
+
+
 def escape_html(text: str) -> str:
     """Escape special characters for Telegram HTML.
 
@@ -914,17 +991,25 @@ def handle_message(message: dict):
                 ]
             }
 
-            # Edit the status message with the result and buttons
+            # Delete the status message first
             if status_msg_id:
-                edit_message(
+                delete_message(chat_id, status_msg_id)
+
+            # Try to send with cover image if available
+            photo_sent = False
+            if result.cover_url:
+                photo_msg_id = send_photo(
                     chat_id,
-                    status_msg_id,
-                    response,
+                    result.cover_url,
+                    caption=response,
                     parse_mode="HTML",
-                    disable_preview=True,
+                    reply_to_message_id=message_id,
                     reply_markup=inline_keyboard,
                 )
-            else:
+                photo_sent = photo_msg_id is not None
+
+            # Fallback to text message if photo failed
+            if not photo_sent:
                 send_message(
                     chat_id,
                     response,
@@ -968,16 +1053,25 @@ def handle_message(message: dict):
                 ]
             }
 
+            # Delete the status message first
             if status_msg_id:
-                edit_message(
+                delete_message(chat_id, status_msg_id)
+
+            # Try to send with cover image if available
+            photo_sent = False
+            if result.cover_url:
+                photo_msg_id = send_photo(
                     chat_id,
-                    status_msg_id,
-                    response,
+                    result.cover_url,
+                    caption=response,
                     parse_mode="HTML",
-                    disable_preview=True,
+                    reply_to_message_id=message_id,
                     reply_markup=inline_keyboard,
                 )
-            else:
+                photo_sent = photo_msg_id is not None
+
+            # Fallback to text message if photo failed
+            if not photo_sent:
                 send_message(
                     chat_id,
                     response,
@@ -1041,36 +1135,39 @@ def handle_inline_query(inline_query: dict):
                 title_display = escape_html(title_raw)
                 author_display = escape_html(result.author)
 
-                # Create article result (use HTML format)
-                results.append(
-                    {
-                        "type": "article",
-                        "id": f"jm_{jm_id}_found",
-                        "title": f"{source_emoji} JM{jm_id}",
-                        "description": f"{title_raw} - {result.author}",
-                        "input_message_content": {
-                            "message_text": (
-                                f"{source_emoji} <b>JM{jm_id}</b>\n\n"
-                                f"📚 {title_display}\n"
-                                f"✍️ {author_display}\n"
-                                f"🔗 {source_name}"
-                            ),
-                            "parse_mode": "HTML",
-                            "disable_web_page_preview": True,
-                        },
-                        "reply_markup": {
-                            "inline_keyboard": [
-                                [
-                                    {"text": "🔗 打开链接", "url": result.link},
-                                    {
-                                        "text": "📋 JMComic",
-                                        "url": f"https://18comic.vip/album/{jm_id}",
-                                    },
-                                ]
+                # Create article result with thumbnail (use HTML format)
+                article_result = {
+                    "type": "article",
+                    "id": f"jm_{jm_id}_found",
+                    "title": f"{source_emoji} JM{jm_id}",
+                    "description": f"{title_raw} - {result.author}",
+                    "input_message_content": {
+                        "message_text": (
+                            f"{source_emoji} <b>JM{jm_id}</b>\n\n"
+                            f"📚 {title_display}\n"
+                            f"✍️ {author_display}\n"
+                            f"🔗 {source_name}"
+                        ),
+                        "parse_mode": "HTML",
+                        "disable_web_page_preview": True,
+                    },
+                    "reply_markup": {
+                        "inline_keyboard": [
+                            [
+                                {"text": "🔗 打开链接", "url": result.link},
+                                {
+                                    "text": "📋 JMComic",
+                                    "url": f"https://18comic.vip/album/{jm_id}",
+                                },
                             ]
-                        },
-                    }
-                )
+                        ]
+                    },
+                }
+                # Add thumbnail if cover URL is available
+                if result.cover_url:
+                    article_result["thumbnail_url"] = result.cover_url
+
+                results.append(article_result)
             else:
                 # Not found
                 title_raw = result.title[:60] + (
@@ -1079,23 +1176,26 @@ def handle_inline_query(inline_query: dict):
                 title_display = escape_html(title_raw)
                 author_display = escape_html(result.author)
 
-                results.append(
-                    {
-                        "type": "article",
-                        "id": f"jm_{jm_id}_notfound",
-                        "title": f"❌ JM{jm_id} - 未找到",
-                        "description": f"{title_raw} - 无匹配画廊",
-                        "input_message_content": {
-                            "message_text": (
-                                f"❌ <b>JM{jm_id}</b>\n\n"
-                                f"📚 {title_display}\n"
-                                f"✍️ {author_display}\n\n"
-                                "未找到匹配的画廊。"
-                            ),
-                            "parse_mode": "HTML",
-                        },
-                    }
-                )
+                article_result = {
+                    "type": "article",
+                    "id": f"jm_{jm_id}_notfound",
+                    "title": f"❌ JM{jm_id} - 未找到",
+                    "description": f"{title_raw} - 无匹配画廊",
+                    "input_message_content": {
+                        "message_text": (
+                            f"❌ <b>JM{jm_id}</b>\n\n"
+                            f"📚 {title_display}\n"
+                            f"✍️ {author_display}\n\n"
+                            "未找到匹配的画廊。"
+                        ),
+                        "parse_mode": "HTML",
+                    },
+                }
+                # Add thumbnail if cover URL is available
+                if result.cover_url:
+                    article_result["thumbnail_url"] = result.cover_url
+
+                results.append(article_result)
         except Exception as e:
             results.append(
                 {
