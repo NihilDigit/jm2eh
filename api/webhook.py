@@ -270,10 +270,17 @@ def set_user_persist(user_id: int, enabled: bool) -> bool:
     _user_persist[user_id] = enabled
 
     if enabled:
-        kv_set(f"user:{user_id}:persist", "1")
+        # Write persist flag and check result
+        persist_ok = kv_set(f"user:{user_id}:persist", "1")
+        if not persist_ok:
+            print(f"[Persist] Failed to write persist flag for user {user_id}")
+            return False
         # Also persist current cookie if exists
         if user_id in _user_cookies:
-            kv_set(f"user:{user_id}:cookie", _user_cookies[user_id])
+            cookie_ok = kv_set(f"user:{user_id}:cookie", _user_cookies[user_id])
+            if not cookie_ok:
+                print(f"[Persist] Failed to write cookie for user {user_id}")
+                return False
     else:
         kv_delete(f"user:{user_id}:persist")
         kv_delete(f"user:{user_id}:cookie")
