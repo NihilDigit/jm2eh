@@ -359,7 +359,6 @@ def set_my_commands():
         {"command": "status", "description": "查看当前状态"},
         {"command": "persist", "description": "启用云端存储"},
         {"command": "forget", "description": "删除所有数据"},
-        {"command": "clear", "description": "清屏"},
         {"command": "help", "description": "显示帮助信息"},
     ]
 
@@ -719,7 +718,6 @@ def handle_message(message: dict):
             "/jm &lt;id&gt; - 转换 JM ID\n"
             "/status - 查看当前状态\n"
             "/setcookie - 设置 Cookie\n"
-            "/clear - 清屏\n"
             f"{cloud_section}\n"
             "<b>🍪 设置 Cookie</b>\n"
             "直接粘贴 Cookie，或:\n"
@@ -812,15 +810,6 @@ def handle_message(message: dict):
             "• 云端存储已禁用\n"
             "• 本地缓存已清除\n\n"
             "如需继续使用ExHentai，请重新设置cookie。",
-        )
-        return
-
-    # Handle /clear command (clear screen)
-    if text == "/clear":
-        # Send a message with many newlines to "clear" the chat visually
-        send_message(
-            chat_id,
-            "\n" * 50 + "🧹 已清屏",
         )
         return
 
@@ -1281,7 +1270,6 @@ def handle_callback_query(callback_query: dict):
             "/jm &lt;id&gt; - 转换 JM ID\n"
             "/status - 查看当前状态\n"
             "/setcookie - 设置 Cookie\n"
-            "/clear - 清屏\n"
             f"{cloud_section}\n"
             "<b>🍪 设置 Cookie</b>\n"
             "直接粘贴 Cookie，或:\n"
