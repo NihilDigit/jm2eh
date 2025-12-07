@@ -1110,12 +1110,16 @@ class handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         """Health check endpoint."""
-        # Debug: show env vars status
+        # Debug: show env vars status (partial values for security)
         env_status = {
-            "EDGE_CONFIG": bool(EDGE_CONFIG),
-            "EDGE_CONFIG_ID": bool(EDGE_CONFIG_ID),
-            "VERCEL_API_TOKEN": bool(VERCEL_API_TOKEN),
-            "VERCEL_TEAM_ID": bool(VERCEL_TEAM_ID),
+            "EDGE_CONFIG": EDGE_CONFIG[:50] + "..."
+            if len(EDGE_CONFIG) > 50
+            else EDGE_CONFIG,
+            "EDGE_CONFIG_ID": EDGE_CONFIG_ID,
+            "VERCEL_API_TOKEN": VERCEL_API_TOKEN[:20] + "..."
+            if len(VERCEL_API_TOKEN) > 20
+            else "missing",
+            "VERCEL_TEAM_ID": VERCEL_TEAM_ID,
             "kv_available": kv_available(),
         }
         self.send_response(200)
