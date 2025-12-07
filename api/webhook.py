@@ -77,6 +77,7 @@ def _edge_config_write(items: dict) -> bool:
         items: Dict of key-value pairs to upsert
     """
     if not (EDGE_CONFIG_ID and VERCEL_API_TOKEN):
+        print(f"[EdgeConfig] Write failed: missing EDGE_CONFIG_ID or VERCEL_API_TOKEN")
         return False
 
     try:
@@ -99,8 +100,12 @@ def _edge_config_write(items: dict) -> bool:
                 },
                 json=payload,
             )
+            print(
+                f"[EdgeConfig] Write response: {resp.status_code} - {resp.text[:200]}"
+            )
             return resp.status_code == 200
-    except Exception:
+    except Exception as e:
+        print(f"[EdgeConfig] Write exception: {e}")
         return False
 
 
