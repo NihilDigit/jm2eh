@@ -6,6 +6,7 @@ import json
 import os
 import re
 import httpx
+import urllib.parse
 from http.server import BaseHTTPRequestHandler
 from typing import Optional
 
@@ -149,6 +150,18 @@ def edit_message(
             )
     except Exception:
         pass  # Fall back to sending new message if edit fails
+
+
+def escape_markdown(text: str) -> str:
+    """Escape special characters for Telegram Markdown.
+
+    Characters that need escaping: _ * [ ] ( ) ~ ` > # + - = | { } . !
+    """
+    # For basic Markdown mode, we mainly need to escape: _ * ` [
+    special_chars = ["_", "*", "`", "[", "]", "(", ")"]
+    for char in special_chars:
+        text = text.replace(char, f"\\{char}")
+    return text
 
 
 def normalize_cookie(raw: str) -> Optional[str]:
@@ -464,14 +477,14 @@ def handle_message(message: dict):
             }.get(result.source, result.source)
 
             # Escape markdown special chars in title/author
-            title_display = result.title[:80] + (
-                "..." if len(result.title) > 80 else ""
-            )
+            title_raw = result.title[:80] + ("..." if len(result.title) > 80 else "")
+            title_display = escape_markdown(title_raw)
+            author_display = escape_markdown(result.author)
 
             response = (
                 f"{source_emoji} *JM{jm_id}*\n\n"
                 f"📚 {title_display}\n"
-                f"✍️ {result.author}\n"
+                f"✍️ {author_display}\n"
                 f"🔗 {source_name}\n\n"
                 f"[👉 打开链接]({result.link})"
             )
@@ -517,25 +530,27 @@ def handle_message(message: dict):
             # Not found, sad reaction
             set_message_reaction(chat_id, message_id, "😢")
 
-            title_display = result.title[:80] + (
-                "..." if len(result.title) > 80 else ""
-            )
+            title_raw = result.title[:80] + ("..." if len(result.title) > 80 else "")
+            title_display = escape_markdown(title_raw)
+            author_display = escape_markdown(result.author)
+
             response = (
                 f"❌ *JM{jm_id}*\n\n"
                 f"📚 {title_display}\n"
-                f"✍️ {result.author}\n\n"
+                f"✍️ {author_display}\n\n"
                 "未找到匹配的画廊。"
             )
             if not user_cookie:
                 response += "\n\n💡 提示: 设置ExHentai cookie可能找到更多结果。"
 
-            # Add a button to search manually
+            # Add a button to search manually (URL encode title for search)
+            search_query = urllib.parse.quote(f"{result.title} site:e-hentai.org")
             inline_keyboard = {
                 "inline_keyboard": [
                     [
                         {
                             "text": "🔍 Google搜索",
-                            "url": f"https://www.google.com/search?q={result.title}+site:e-hentai.org",
+                            "url": f"https://www.google.com/search?q={search_query}",
                         },
                         {
                             "text": "📋 JMComic",
@@ -611,9 +626,11 @@ def handle_inline_query(inline_query: dict):
                     "wnacg": "绅士漫画",
                 }.get(result.source, result.source)
 
-                title_display = result.title[:60] + (
+                title_raw = result.title[:60] + (
                     "..." if len(result.title) > 60 else ""
                 )
+                title_display = escape_markdown(title_raw)
+                author_display = escape_markdown(result.author)
 
                 # Create article result
                 results.append(
@@ -621,12 +638,12 @@ def handle_inline_query(inline_query: dict):
                         "type": "article",
                         "id": f"jm_{jm_id}_found",
                         "title": f"{source_emoji} JM{jm_id}",
-                        "description": f"{title_display} - {result.author}",
+                        "description": f"{title_raw} - {result.author}",
                         "input_message_content": {
                             "message_text": (
                                 f"{source_emoji} *JM{jm_id}*\n\n"
                                 f"📚 {title_display}\n"
-                                f"✍️ {result.author}\n"
+                                f"✍️ {author_display}\n"
                                 f"🔗 {source_name}\n\n"
                                 f"[👉 打开链接]({result.link})"
                             ),
@@ -648,20 +665,23 @@ def handle_inline_query(inline_query: dict):
                 )
             else:
                 # Not found
-                title_display = result.title[:60] + (
+                title_raw = result.title[:60] + (
                     "..." if len(result.title) > 60 else ""
                 )
+                title_display = escape_markdown(title_raw)
+                author_display = escape_markdown(result.author)
+
                 results.append(
                     {
                         "type": "article",
                         "id": f"jm_{jm_id}_notfound",
                         "title": f"❌ JM{jm_id} - 未找到",
-                        "description": f"{title_display} - 无匹配画廊",
+                        "description": f"{title_raw} - 无匹配画廊",
                         "input_message_content": {
                             "message_text": (
                                 f"❌ *JM{jm_id}*\n\n"
                                 f"📚 {title_display}\n"
-                                f"✍️ {result.author}\n\n"
+                                f"✍️ {author_display}\n\n"
                                 "未找到匹配的画廊。"
                             ),
                             "parse_mode": "Markdown",
