@@ -19,7 +19,14 @@ from jm2e import JM2EConverter
 TELEGRAM_API = "https://api.telegram.org"
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
 
-# Vercel KV configuration (for persistent storage)
+# Vercel Edge Config (for persistent storage)
+# Supports both Vercel KV (legacy) and Edge Config
+EDGE_CONFIG = os.environ.get("EDGE_CONFIG", "")  # Connection string with token
+EDGE_CONFIG_ID = os.environ.get("EDGE_CONFIG_ID", "")
+VERCEL_API_TOKEN = os.environ.get("VERCEL_API_TOKEN", "")
+VERCEL_TEAM_ID = os.environ.get("VERCEL_TEAM_ID", "")
+
+# Legacy Vercel KV support (fallback)
 KV_REST_API_URL = os.environ.get("KV_REST_API_URL", "")
 KV_REST_API_TOKEN = os.environ.get("KV_REST_API_TOKEN", "")
 
@@ -34,17 +41,103 @@ _user_cookies: dict[int, str] = {}
 _user_persist: dict[int, bool] = {}
 
 
-# ============== Vercel KV Helper Functions ==============
+# ============== Storage Helper Functions (Edge Config / KV) ==============
 
 
 def kv_available() -> bool:
-    """Check if Vercel KV is configured."""
+    """Check if persistent storage is configured (Edge Config or KV)."""
+    # Prefer Edge Config
+    if EDGE_CONFIG and EDGE_CONFIG_ID and VERCEL_API_TOKEN:
+        return True
+    # Fallback to legacy KV
     return bool(KV_REST_API_URL and KV_REST_API_TOKEN)
 
 
+def _edge_config_read(key: str) -> Optional[str]:
+    """Read from Edge Config."""
+    if not EDGE_CONFIG:
+        return None
+
+    try:
+        with httpx.Client(timeout=5) as client:
+            resp = client.get(
+                f"{EDGE_CONFIG.split('?')[0]}/item/{key}?{EDGE_CONFIG.split('?')[1]}"
+            )
+            if resp.status_code == 200:
+                return resp.json()
+            return None
+    except Exception:
+        return None
+
+
+def _edge_config_write(items: dict) -> bool:
+    """Write to Edge Config via Vercel API.
+
+    Args:
+        items: Dict of key-value pairs to upsert
+    """
+    if not (EDGE_CONFIG_ID and VERCEL_API_TOKEN):
+        return False
+
+    try:
+        url = f"https://api.vercel.com/v1/edge-config/{EDGE_CONFIG_ID}/items"
+        if VERCEL_TEAM_ID:
+            url += f"?teamId={VERCEL_TEAM_ID}"
+
+        payload = {
+            "items": [
+                {"operation": "upsert", "key": k, "value": v} for k, v in items.items()
+            ]
+        }
+
+        with httpx.Client(timeout=10) as client:
+            resp = client.patch(
+                url,
+                headers={
+                    "Authorization": f"Bearer {VERCEL_API_TOKEN}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
+            return resp.status_code == 200
+    except Exception:
+        return False
+
+
+def _edge_config_delete(keys: list[str]) -> bool:
+    """Delete from Edge Config via Vercel API."""
+    if not (EDGE_CONFIG_ID and VERCEL_API_TOKEN):
+        return False
+
+    try:
+        url = f"https://api.vercel.com/v1/edge-config/{EDGE_CONFIG_ID}/items"
+        if VERCEL_TEAM_ID:
+            url += f"?teamId={VERCEL_TEAM_ID}"
+
+        payload = {"items": [{"operation": "delete", "key": k} for k in keys]}
+
+        with httpx.Client(timeout=10) as client:
+            resp = client.patch(
+                url,
+                headers={
+                    "Authorization": f"Bearer {VERCEL_API_TOKEN}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
+            return resp.status_code == 200
+    except Exception:
+        return False
+
+
 def kv_get(key: str) -> Optional[str]:
-    """Get value from Vercel KV."""
-    if not kv_available():
+    """Get value from storage."""
+    # Try Edge Config first
+    if EDGE_CONFIG:
+        return _edge_config_read(key)
+
+    # Fallback to legacy KV
+    if not (KV_REST_API_URL and KV_REST_API_TOKEN):
         return None
 
     try:
@@ -61,14 +154,13 @@ def kv_get(key: str) -> Optional[str]:
 
 
 def kv_set(key: str, value: str, ex: int | None = None) -> bool:
-    """Set value in Vercel KV.
+    """Set value in storage."""
+    # Try Edge Config first
+    if EDGE_CONFIG and EDGE_CONFIG_ID and VERCEL_API_TOKEN:
+        return _edge_config_write({key: value})
 
-    Args:
-        key: The key to set
-        value: The value to store
-        ex: Optional expiration time in seconds
-    """
-    if not kv_available():
+    # Fallback to legacy KV
+    if not (KV_REST_API_URL and KV_REST_API_TOKEN):
         return False
 
     try:
@@ -87,8 +179,13 @@ def kv_set(key: str, value: str, ex: int | None = None) -> bool:
 
 
 def kv_delete(key: str) -> bool:
-    """Delete key from Vercel KV."""
-    if not kv_available():
+    """Delete key from storage."""
+    # Try Edge Config first
+    if EDGE_CONFIG and EDGE_CONFIG_ID and VERCEL_API_TOKEN:
+        return _edge_config_delete([key])
+
+    # Fallback to legacy KV
+    if not (KV_REST_API_URL and KV_REST_API_TOKEN):
         return False
 
     try:
