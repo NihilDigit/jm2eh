@@ -1142,6 +1142,18 @@ class handler(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps(response).encode())
             return
 
+        # Test persist with fake user
+        if query == "test_persist":
+            test_user_id = 12345
+            _user_cookies[test_user_id] = "test_cookie_value"
+            result = set_user_persist(test_user_id, True)
+            response = {"test_persist": result}
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(response).encode())
+            return
+
         # Debug: show env vars status (partial values for security)
         env_status = {
             "EDGE_CONFIG": EDGE_CONFIG[:50] + "..."
