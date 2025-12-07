@@ -1246,8 +1246,8 @@ def handle_inline_query(inline_query: dict):
                 "input_message_content": {
                     "message_text": (
                         "🔗 <b>JM2E Bot</b>\n\n"
-                        "使用方法: <code>@jm2eh_bot &lt;JM ID&gt;</code>\n"
-                        "例如: <code>@jm2eh_bot 540930</code>"
+                        "使用方法: <code>@bot_username &lt;JM ID&gt;</code>\n"
+                        "例如: <code>@bot_username 540930</code>"
                     ),
                     "parse_mode": "HTML",
                 },

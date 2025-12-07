@@ -2,8 +2,6 @@
 
 Telegram bot that converts JMComic IDs to E-Hentai / wnacg links.
 
-**Bot**: [@jm2eh_bot](https://t.me/jm2eh_bot)
-
 ## Usage
 
 Send a JMComic ID to the bot:
