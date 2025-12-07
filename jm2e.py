@@ -1,11 +1,12 @@
 """
-JM2E: JMComic to E-Hentai link converter with fallback chain.
+JM2E: JMComic to E-Hentai/ExHentai link converter with fallback chain.
 
 Query flow (4 queries max):
-1. E-Hentai: Pure romaji (pykakasi)
-2. E-Hentai: Romaji + English keywords (SimplyTranslate for katakana)
-3. E-Hentai: English translation (SimplyTranslate API)
-4. wnacg: Chinese title direct search
+1. ExHentai (if cookie provided): Same queries as E-Hentai but on exhentai.org
+2. E-Hentai: Pure romaji (pykakasi)
+3. E-Hentai: Romaji + English keywords (SimplyTranslate for katakana)
+4. E-Hentai: English translation (SimplyTranslate API)
+5. wnacg: Chinese title direct search
 
 Performance optimizations:
 - Caches derived forms (romaji, jp_kanji) per conversion
@@ -350,7 +351,7 @@ class ConversionResult:
     title: str
     author: str
     link: str
-    source: str  # 'ehentai', 'wnacg', 'none'
+    source: str  # 'exhentai', 'ehentai', 'wnacg', 'none'
     similarity: float = 0.0
 
     def __str__(self):
@@ -401,11 +402,19 @@ class SearchContext:
 
 
 class JM2EConverter:
-    """Converts JMComic IDs to E-Hentai links with fallback."""
+    """Converts JMComic IDs to E-Hentai/ExHentai links with fallback."""
 
-    def __init__(self):
+    def __init__(self, exhentai_cookie: Optional[str] = None):
+        """Initialize converter.
+
+        Args:
+            exhentai_cookie: Optional ExHentai cookie string for accessing exhentai.org.
+                            Format: "ipb_member_id=xxx; ipb_pass_hash=xxx; igneous=xxx"
+                            If provided, ExHentai will be tried before E-Hentai.
+        """
         self.jm_option = jmcomic.JmOption.default()
         self.jm_client = self.jm_option.new_jm_client()
+        self.exhentai_cookie = exhentai_cookie
 
     def get_jm_info(self, jm_id: str) -> dict:
         """Get album info from JMComic ID."""
@@ -536,6 +545,151 @@ class JM2EConverter:
 
         except Exception as e:
             print(f"  [E-H] Search error: {e}")
+
+        return None, 0.0
+
+    def search_exhentai_single(
+        self,
+        query: str,
+        candidates: list[str],
+        english_title: Optional[str] = None,
+        cookie: Optional[str] = None,
+    ) -> tuple[Optional[str], float]:
+        """Single ExHentai search query (requires cookie).
+
+        Args:
+            query: Search query string
+            candidates: List of candidate titles for matching
+            english_title: Optional English title hint for matching
+            cookie: ExHentai cookie string (ipb_member_id + ipb_pass_hash)
+
+        Returns: (url, similarity_score) or (None, 0)
+        """
+        if not cookie:
+            return None, 0.0
+
+        try:
+            from bs4 import BeautifulSoup
+            from curl_cffi import requests as curl_requests
+
+            print(f"  [ExH] Searching: {query}")
+
+            # Build search URL
+            params = {"f_search": query, "f_cats": 0}
+            url = "https://exhentai.org/"
+
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.5",
+                "Cookie": cookie,
+            }
+
+            resp = curl_requests.get(
+                url,
+                params=params,
+                headers=headers,
+                impersonate="chrome",
+                timeout=15,
+            )
+
+            if resp.status_code != 200:
+                print(f"  [ExH] HTTP error: {resp.status_code}")
+                return None, 0.0
+
+            # Check for sad panda (invalid cookie)
+            if "sad panda" in resp.text.lower() or len(resp.text) < 1000:
+                print("  [ExH] ✗ Invalid cookie (sad panda)")
+                return None, 0.0
+
+            soup = BeautifulSoup(resp.text, "lxml")
+
+            # Parse gallery table (same structure as E-Hentai)
+            table = soup.find("table", class_="itg gltc")
+            if not table:
+                # Try alternate table class
+                table = soup.find("table", class_="itg")
+            if not table:
+                print("  [ExH] ✗ No results")
+                return None, 0.0
+
+            best_match_url: Optional[str] = None
+            best_match_name: Optional[str] = None
+            best_total_score = 0.0
+
+            # Find gallery rows
+            trs = table.find_all("tr")
+            gallery_count = 0
+
+            for tr in trs:
+                # Find gallery name and URL
+                glink = tr.find("div", class_="glink")
+                if not glink:
+                    continue
+
+                gallery_name = glink.get_text(strip=True)
+                if not gallery_name:
+                    continue
+
+                gallery_count += 1
+
+                # Find URL
+                link_tag = tr.find("a", href=True)
+                if not link_tag:
+                    continue
+                gallery_url = link_tag.get("href", "")
+                if "exhentai.org/g/" not in gallery_url:
+                    # Try to find the correct link
+                    for a_tag in tr.find_all("a", href=True):
+                        href = a_tag.get("href", "")
+                        if "exhentai.org/g/" in href:
+                            gallery_url = href
+                            break
+
+                if not gallery_url or "exhentai.org/g/" not in gallery_url:
+                    continue
+
+                # Calculate score
+                total_score = 0.0
+                max_single_score = 0.0
+                for candidate in candidates:
+                    score, _ = calc_match_score(candidate, gallery_name, english_title)
+                    total_score += score
+                    max_single_score = max(max_single_score, score)
+
+                weighted_score = (
+                    max_single_score * 0.7 + (total_score / len(candidates)) * 0.3
+                )
+
+                if weighted_score > best_total_score:
+                    best_total_score = weighted_score
+                    best_match_url = gallery_url
+                    best_match_name = gallery_name
+
+            # Determine threshold
+            threshold = SIMILARITY_THRESHOLD
+            has_cjk_query = any("\u3040" <= c <= "\u9fff" for c in query)
+            single_result = gallery_count == 1
+
+            if has_cjk_query and single_result and best_total_score >= 0.15:
+                print(
+                    f"  [ExH] ✓ Single result (CJK query): {best_total_score:.2f} | {best_match_name[:60] if best_match_name else ''}"
+                )
+                return best_match_url, max(best_total_score, 0.70)
+
+            if best_match_url and best_total_score >= threshold and best_match_name:
+                print(
+                    f"  [ExH] ✓ Best: {best_total_score:.2f} | {best_match_name[:60]}"
+                )
+                return best_match_url, best_total_score
+
+            if best_match_name:
+                print(
+                    f"  [ExH] ✗ Below threshold: {best_total_score:.2f} | {best_match_name[:60]}"
+                )
+
+        except Exception as e:
+            print(f"  [ExH] Search error: {e}")
 
         return None, 0.0
 
@@ -690,7 +844,10 @@ class JM2EConverter:
             jm_id: JMComic album ID
             concurrent: If True, run initial E-Hentai queries concurrently for speed
 
-        Query flow:
+        Query flow (if ExHentai cookie is provided):
+        0. ExHentai: Same queries as E-Hentai but on exhentai.org (priority)
+
+        Query flow (E-Hentai fallback):
         1. E-Hentai: Best available title (English from desc/title, or romaji)
         1b. E-Hentai: Quoted title without author
         2. E-Hentai: Romaji + English keywords (Jamdict)
@@ -770,74 +927,141 @@ class JM2EConverter:
             if query2 != query1:  # Avoid duplicate
                 queries.append((query2, "query2", romaji_eng))
 
-        if concurrent and len(queries) >= 2:
-            # Run first batch of queries concurrently
-            result = self._search_concurrent(
-                queries, candidates, ctx, jm_id, title, author
-            )
-            if result:
-                return result
-        else:
-            # Sequential search
+        # --- ExHentai search (if cookie is provided) ---
+        if self.exhentai_cookie:
+            print("  → Trying ExHentai (with cookie)...")
             for query, name, eng_hint in queries:
-                link, sim = self.search_ehentai_single(query, candidates, eng_hint)
-                if link:
-                    return ConversionResult(
-                        jm_id=jm_id,
-                        title=title,
-                        author=author,
-                        link=link,
-                        source="ehentai",
-                        similarity=sim,
-                    )
-
-        # --- Query 3: English translation (SimplyTranslate) ---
-        if not english_title:
-            print("  → Trying English translation...")
-            translated = translate_to_english(oname, source="ja")
-            if translated:
-                trans_words = translated.split()
-                if len(trans_words) > 4:
-                    translated = " ".join(trans_words[:4])
-                query3 = f"{ctx.author_romaji} {translated} l:chinese".strip()
-                link, sim = self.search_ehentai_single(query3, candidates, translated)
-                if link:
-                    return ConversionResult(
-                        jm_id=jm_id,
-                        title=title,
-                        author=author,
-                        link=link,
-                        source="ehentai",
-                        similarity=sim,
-                    )
-
-        # --- Query 3b: Japanese title direct search ---
-        jp_oname = ctx.jp_oname
-        if jp_oname and any("\u3040" <= c <= "\u9fff" for c in jp_oname):
-            print("  → Trying Japanese title search...")
-            query3b = f"{jp_oname} l:chinese"
-            link, sim = self.search_ehentai_single(query3b, candidates, english_title)
-            if link:
-                return ConversionResult(
-                    jm_id=jm_id,
-                    title=title,
-                    author=author,
-                    link=link,
-                    source="ehentai",
-                    similarity=sim,
+                # Remove l:chinese filter for ExHentai queries (use same queries)
+                exh_query = query.replace(" l:chinese", "").strip()
+                link, sim = self.search_exhentai_single(
+                    exh_query, candidates, eng_hint, self.exhentai_cookie
                 )
+                if link:
+                    return ConversionResult(
+                        jm_id=jm_id,
+                        title=title,
+                        author=author,
+                        link=link,
+                        source="exhentai",
+                        similarity=sim,
+                    )
 
-        # --- Query 3c: Extract Japanese title from full title ---
-        jp_from_title = self._extract_jp_title(title)
-        if jp_from_title:
-            jp_search = re.sub(r"\s*[+＋].*", "", jp_from_title).strip()
-            jp_search = re.sub(r"\s*\d+P.*", "", jp_search).strip()
-            jp_search = to_jp_kanji(jp_search)
-            if jp_search and len(jp_search) >= 3 and jp_search != jp_oname:
-                print(f"  → Trying extracted JP title: {ctx.author_jp} {jp_search}")
-                query3c = f"{ctx.author_jp} {jp_search} l:chinese".strip()
+            # Additional ExHentai queries (translation, JP title) if initial queries failed
+            if not english_title:
+                print("  → Trying English translation (ExHentai)...")
+                translated = translate_to_english(oname, source="ja")
+                if translated:
+                    trans_words = translated.split()
+                    if len(trans_words) > 4:
+                        translated = " ".join(trans_words[:4])
+                    exh_query = f"{ctx.author_romaji} {translated}".strip()
+                    link, sim = self.search_exhentai_single(
+                        exh_query, candidates, translated, self.exhentai_cookie
+                    )
+                    if link:
+                        return ConversionResult(
+                            jm_id=jm_id,
+                            title=title,
+                            author=author,
+                            link=link,
+                            source="exhentai",
+                            similarity=sim,
+                        )
+
+            # Japanese title direct search on ExHentai
+            jp_oname = ctx.jp_oname
+            if jp_oname and any("\u3040" <= c <= "\u9fff" for c in jp_oname):
+                print("  → Trying Japanese title search (ExHentai)...")
+                link, sim = self.search_exhentai_single(
+                    jp_oname, candidates, english_title, self.exhentai_cookie
+                )
+                if link:
+                    return ConversionResult(
+                        jm_id=jm_id,
+                        title=title,
+                        author=author,
+                        link=link,
+                        source="exhentai",
+                        similarity=sim,
+                    )
+
+            # Extracted JP title on ExHentai
+            jp_from_title = self._extract_jp_title(title)
+            if jp_from_title:
+                jp_search = re.sub(r"\s*[+＋].*", "", jp_from_title).strip()
+                jp_search = re.sub(r"\s*\d+P.*", "", jp_search).strip()
+                jp_search = to_jp_kanji(jp_search)
+                if jp_search and len(jp_search) >= 3 and jp_search != jp_oname:
+                    print(
+                        f"  → Trying extracted JP title (ExHentai): {ctx.author_jp} {jp_search}"
+                    )
+                    exh_query = f"{ctx.author_jp} {jp_search}".strip()
+                    link, sim = self.search_exhentai_single(
+                        exh_query, candidates, english_title, self.exhentai_cookie
+                    )
+                    if link:
+                        return ConversionResult(
+                            jm_id=jm_id,
+                            title=title,
+                            author=author,
+                            link=link,
+                            source="exhentai",
+                            similarity=sim,
+                        )
+
+            # Skip E-Hentai, go directly to wnacg
+        else:
+            # --- E-Hentai search (no ExHentai cookie) ---
+            if concurrent and len(queries) >= 2:
+                # Run first batch of queries concurrently
+                result = self._search_concurrent(
+                    queries, candidates, ctx, jm_id, title, author
+                )
+                if result:
+                    return result
+            else:
+                # Sequential search
+                for query, name, eng_hint in queries:
+                    link, sim = self.search_ehentai_single(query, candidates, eng_hint)
+                    if link:
+                        return ConversionResult(
+                            jm_id=jm_id,
+                            title=title,
+                            author=author,
+                            link=link,
+                            source="ehentai",
+                            similarity=sim,
+                        )
+
+            # --- Query 3: English translation (SimplyTranslate) ---
+            if not english_title:
+                print("  → Trying English translation...")
+                translated = translate_to_english(oname, source="ja")
+                if translated:
+                    trans_words = translated.split()
+                    if len(trans_words) > 4:
+                        translated = " ".join(trans_words[:4])
+                    query3 = f"{ctx.author_romaji} {translated} l:chinese".strip()
+                    link, sim = self.search_ehentai_single(
+                        query3, candidates, translated
+                    )
+                    if link:
+                        return ConversionResult(
+                            jm_id=jm_id,
+                            title=title,
+                            author=author,
+                            link=link,
+                            source="ehentai",
+                            similarity=sim,
+                        )
+
+            # --- Query 3b: Japanese title direct search ---
+            jp_oname = ctx.jp_oname
+            if jp_oname and any("\u3040" <= c <= "\u9fff" for c in jp_oname):
+                print("  → Trying Japanese title search...")
+                query3b = f"{jp_oname} l:chinese"
                 link, sim = self.search_ehentai_single(
-                    query3c, candidates, english_title
+                    query3b, candidates, english_title
                 )
                 if link:
                     return ConversionResult(
@@ -848,6 +1072,28 @@ class JM2EConverter:
                         source="ehentai",
                         similarity=sim,
                     )
+
+            # --- Query 3c: Extract Japanese title from full title ---
+            jp_from_title = self._extract_jp_title(title)
+            if jp_from_title:
+                jp_search = re.sub(r"\s*[+＋].*", "", jp_from_title).strip()
+                jp_search = re.sub(r"\s*\d+P.*", "", jp_search).strip()
+                jp_search = to_jp_kanji(jp_search)
+                if jp_search and len(jp_search) >= 3 and jp_search != jp_oname:
+                    print(f"  → Trying extracted JP title: {ctx.author_jp} {jp_search}")
+                    query3c = f"{ctx.author_jp} {jp_search} l:chinese".strip()
+                    link, sim = self.search_ehentai_single(
+                        query3c, candidates, english_title
+                    )
+                    if link:
+                        return ConversionResult(
+                            jm_id=jm_id,
+                            title=title,
+                            author=author,
+                            link=link,
+                            source="ehentai",
+                            similarity=sim,
+                        )
 
         # --- Query 4: wnacg ---
         print("  → Trying wnacg.com...")
