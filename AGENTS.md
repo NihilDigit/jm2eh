@@ -8,11 +8,10 @@ Create a Telegram bot that converts JMComic IDs to E-Hentai links with fallback 
 
 ## Output Priority (Fallback Chain)
 1. **Primary**: E-Hentai gallery link
-2. **Fallback 1**: Hitomi.la link
+2. **Fallback 1**: wnacg link
 3. **Fallback 2**: Google search link
 
 ## Telegram Bot
-- API Key: `8307297002:aAHmvY2Ho8mL3oFNmX_YTLH2c813gPYKKm0`
 - Command: Accept JMComic ID as input
 - Response: Return the best available link
 
