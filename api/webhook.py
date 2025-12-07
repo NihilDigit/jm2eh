@@ -1110,7 +1110,15 @@ class handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         """Health check endpoint."""
+        # Debug: show env vars status
+        env_status = {
+            "EDGE_CONFIG": bool(EDGE_CONFIG),
+            "EDGE_CONFIG_ID": bool(EDGE_CONFIG_ID),
+            "VERCEL_API_TOKEN": bool(VERCEL_API_TOKEN),
+            "VERCEL_TEAM_ID": bool(VERCEL_TEAM_ID),
+            "kv_available": kv_available(),
+        }
         self.send_response(200)
-        self.send_header("Content-Type", "text/plain")
+        self.send_header("Content-Type", "application/json")
         self.end_headers()
-        self.wfile.write(b"JM2E Bot is running!")
+        self.wfile.write(json.dumps(env_status).encode())
