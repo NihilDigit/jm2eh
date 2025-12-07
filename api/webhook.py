@@ -718,7 +718,9 @@ def handle_message(message: dict):
                 "1. E-Hentai (默认)\n"
                 "2. wnacg (备选)\n\n"
                 "🔞 <b>解锁 ExHentai</b>\n"
-                "设置 Cookie 后可搜索 ExHentai，找到更多内容",
+                "设置 Cookie 后可搜索 ExHentai，找到更多内容\n\n"
+                "🖼️ <b>封面模糊</b>\n"
+                "默认开启，使用 /blur 切换",
                 parse_mode="HTML",
                 reply_markup={
                     "inline_keyboard": [
@@ -980,13 +982,6 @@ def handle_message(message: dict):
     # Show typing indicator
     send_chat_action(chat_id, "typing")
 
-    # Send initial status message (will be edited later)
-    status_msg_id = send_message(
-        chat_id,
-        f"🔍 正在查询 JM{jm_id}...",
-        reply_to_message_id=message_id,
-    )
-
     try:
         converter = get_converter(user_cookie)
         result = converter.convert(jm_id)
@@ -1029,10 +1024,6 @@ def handle_message(message: dict):
                     ]
                 ]
             }
-
-            # Delete the status message first
-            if status_msg_id:
-                delete_message(chat_id, status_msg_id)
 
             # Try to send with cover image if available
             photo_sent = False
@@ -1094,10 +1085,6 @@ def handle_message(message: dict):
                 ]
             }
 
-            # Delete the status message first
-            if status_msg_id:
-                delete_message(chat_id, status_msg_id)
-
             # Try to send with cover image if available
             photo_sent = False
             if result.cover_url:
@@ -1131,10 +1118,7 @@ def handle_message(message: dict):
         error_msg = str(e)[:150]
         response = f"❌ 查询出错\n\nJM{jm_id}: {error_msg}\n\n请稍后重试。"
 
-        if status_msg_id:
-            edit_message(chat_id, status_msg_id, response)
-        else:
-            send_message(chat_id, response, reply_to_message_id=message_id)
+        send_message(chat_id, response, reply_to_message_id=message_id)
 
 
 def handle_inline_query(inline_query: dict):
