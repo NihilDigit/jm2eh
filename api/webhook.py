@@ -619,9 +619,11 @@ def handle_message(message: dict):
     # Handle /persist command (enable cloud storage)
     if text == "/persist":
         if not kv_available():
+            # Debug info
+            debug = f"EC={bool(EDGE_CONFIG)}, ID={bool(EDGE_CONFIG_ID)}, TOKEN={bool(VERCEL_API_TOKEN)}"
             send_message(
                 chat_id,
-                "⚠️ 云端存储不可用\n\n服务器未配置 Vercel KV。",
+                f"⚠️ 云端存储不可用\n\n服务器未配置存储后端。\n\n(debug: {debug})",
             )
             return
 
