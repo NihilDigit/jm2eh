@@ -77,7 +77,6 @@ def _edge_config_write(items: dict) -> bool:
         items: Dict of key-value pairs to upsert
     """
     if not (EDGE_CONFIG_ID and VERCEL_API_TOKEN):
-        print(f"[EdgeConfig] Write failed: missing EDGE_CONFIG_ID or VERCEL_API_TOKEN")
         return False
 
     try:
@@ -100,12 +99,8 @@ def _edge_config_write(items: dict) -> bool:
                 },
                 json=payload,
             )
-            print(
-                f"[EdgeConfig] Write response: {resp.status_code} - {resp.text[:200]}"
-            )
             return resp.status_code == 200
-    except Exception as e:
-        print(f"[EdgeConfig] Write exception: {e}")
+    except Exception:
         return False
 
 
@@ -265,36 +260,22 @@ def set_user_persist(user_id: int, enabled: bool) -> bool:
     Returns True if successful.
     """
     if not kv_available():
-        print(f"[Persist] KV not available")
         return False
 
     _user_persist[user_id] = enabled
 
     if enabled:
-        # Write persist flag and check result
-        print(f"[Persist] Writing persist flag for user {user_id}")
-        persist_ok = kv_set(f"user_{user_id}_persist", "1")
-        print(f"[Persist] persist_ok = {persist_ok}")
-        if not persist_ok:
-            print(f"[Persist] Failed to write persist flag for user {user_id}")
+        # Write persist flag
+        if not kv_set(f"user_{user_id}_persist", "1"):
             return False
         # Also persist current cookie if exists
-        print(f"[Persist] user_id in _user_cookies = {user_id in _user_cookies}")
         if user_id in _user_cookies:
-            cookie_ok = kv_set(f"user_{user_id}_cookie", _user_cookies[user_id])
-            print(f"[Persist] cookie_ok = {cookie_ok}")
-            if not cookie_ok:
-                print(f"[Persist] Failed to write cookie for user {user_id}")
+            if not kv_set(f"user_{user_id}_cookie", _user_cookies[user_id]):
                 return False
-        else:
-            print(
-                f"[Persist] No cookie in memory for user {user_id}, skipping cookie write"
-            )
     else:
         kv_delete(f"user_{user_id}_persist")
         kv_delete(f"user_{user_id}_cookie")
 
-    print(f"[Persist] Success for user {user_id}")
     return True
 
 
@@ -1127,46 +1108,7 @@ class handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         """Health check endpoint."""
-        # Parse query string for test commands
-        query = ""
-        if "?" in self.path:
-            query = self.path.split("?")[1]
-
-        # Test write to Edge Config
-        if query == "test_write":
-            result = _edge_config_write({"debug_test": "hello_from_bot"})
-            response = {"test_write": result}
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(json.dumps(response).encode())
-            return
-
-        # Test persist with fake user
-        if query == "test_persist":
-            test_user_id = 12345
-            _user_cookies[test_user_id] = "test_cookie_value"
-            result = set_user_persist(test_user_id, True)
-            response = {"test_persist": result}
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(json.dumps(response).encode())
-            return
-
-        # Debug: show env vars status (partial values for security)
-        env_status = {
-            "EDGE_CONFIG": EDGE_CONFIG[:50] + "..."
-            if len(EDGE_CONFIG) > 50
-            else EDGE_CONFIG,
-            "EDGE_CONFIG_ID": EDGE_CONFIG_ID,
-            "VERCEL_API_TOKEN": VERCEL_API_TOKEN[:20] + "..."
-            if len(VERCEL_API_TOKEN) > 20
-            else "missing",
-            "VERCEL_TEAM_ID": VERCEL_TEAM_ID,
-            "kv_available": kv_available(),
-        }
         self.send_response(200)
-        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Type", "text/plain")
         self.end_headers()
-        self.wfile.write(json.dumps(env_status).encode())
+        self.wfile.write(b"JM2E Bot is running!")
