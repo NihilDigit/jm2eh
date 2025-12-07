@@ -358,8 +358,8 @@ def set_my_commands():
         {"command": "setcookie", "description": "设置 ExHentai Cookie"},
         {"command": "status", "description": "查看当前状态"},
         {"command": "persist", "description": "启用云端存储"},
-        {"command": "clearcookie", "description": "清除 Cookie"},
-        {"command": "forget", "description": "删除所有云端数据"},
+        {"command": "forget", "description": "删除所有数据"},
+        {"command": "clear", "description": "清屏"},
         {"command": "help", "description": "显示帮助信息"},
     ]
 
@@ -703,7 +703,7 @@ def handle_message(message: dict):
     # Handle /help command
     if text == "/help":
         cloud_section = (
-            "\n<b>☁️ 云端存储</b>\n/persist - 启用云端存储\n/forget - 删除所有云端数据\n"
+            "\n<b>☁️ 云端存储</b>\n/persist - 启用云端存储\n/forget - 删除所有数据\n"
             if kv_available()
             else ""
         )
@@ -719,7 +719,7 @@ def handle_message(message: dict):
             "/jm &lt;id&gt; - 转换 JM ID\n"
             "/status - 查看当前状态\n"
             "/setcookie - 设置 Cookie\n"
-            "/clearcookie - 清除 Cookie\n"
+            "/clear - 清屏\n"
             f"{cloud_section}\n"
             "<b>🍪 设置 Cookie</b>\n"
             "直接粘贴 Cookie，或:\n"
@@ -753,14 +753,9 @@ def handle_message(message: dict):
                         {"text": "🍪 设置 Cookie", "callback_data": "guide_cookie"},
                         {"text": "☁️ 启用云存储", "callback_data": "persist"},
                     ]
-                    if not user_cookie
-                    else [
-                        {"text": "🗑️ 清除 Cookie", "callback_data": "clearcookie"},
-                        {"text": "☁️ 云存储", "callback_data": "persist"},
-                    ]
                 ]
             }
-            if not user_has_persist
+            if not user_cookie and not user_has_persist
             else None,
         )
         return
@@ -820,16 +815,13 @@ def handle_message(message: dict):
         )
         return
 
-    # Handle /clearcookie command
-    if text == "/clearcookie":
-        if user_cookie:
-            delete_user_cookie(user_id)
-            send_message(
-                chat_id,
-                "🗑️ Cookie已清除\n\n搜索将使用E-Hentai。",
-            )
-        else:
-            send_message(chat_id, "ℹ️ 未设置cookie。")
+    # Handle /clear command (clear screen)
+    if text == "/clear":
+        # Send a message with many newlines to "clear" the chat visually
+        send_message(
+            chat_id,
+            "\n" * 50 + "🧹 已清屏",
+        )
         return
 
     # Handle /setcookie command or direct cookie paste
@@ -1273,7 +1265,7 @@ def handle_callback_query(callback_query: dict):
         answer_callback()
         # Send help message
         cloud_section = (
-            "\n<b>☁️ 云端存储</b>\n/persist - 启用云端存储\n/forget - 删除所有云端数据\n"
+            "\n<b>☁️ 云端存储</b>\n/persist - 启用云端存储\n/forget - 删除所有数据\n"
             if kv_available()
             else ""
         )
@@ -1289,7 +1281,7 @@ def handle_callback_query(callback_query: dict):
             "/jm &lt;id&gt; - 转换 JM ID\n"
             "/status - 查看当前状态\n"
             "/setcookie - 设置 Cookie\n"
-            "/clearcookie - 清除 Cookie\n"
+            "/clear - 清屏\n"
             f"{cloud_section}\n"
             "<b>🍪 设置 Cookie</b>\n"
             "直接粘贴 Cookie，或:\n"
@@ -1353,15 +1345,6 @@ def handle_callback_query(callback_query: dict):
             )
         else:
             answer_callback("❌ 启用失败，请稍后重试", show_alert=True)
-
-    elif data == "clearcookie":
-        user_cookie = get_user_cookie(user_id)
-        if user_cookie:
-            delete_user_cookie(user_id)
-            answer_callback("🗑️ Cookie 已清除", show_alert=False)
-            send_message(chat_id, "🗑️ Cookie 已清除\n\n搜索将使用 E-Hentai。")
-        else:
-            answer_callback("ℹ️ 未设置 Cookie", show_alert=False)
 
     elif data == "dismiss":
         answer_callback()
