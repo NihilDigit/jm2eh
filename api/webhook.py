@@ -347,6 +347,33 @@ def delete_message(chat_id: int, message_id: int):
         pass  # Ignore deletion errors
 
 
+def set_my_commands():
+    """Set bot commands for the menu button.
+
+    This creates the slash command menu that appears when users type '/'.
+    """
+    commands = [
+        {"command": "start", "description": "开始使用 / 查看引导"},
+        {"command": "jm", "description": "转换 JM ID (例: /jm 540930)"},
+        {"command": "setcookie", "description": "设置 ExHentai Cookie"},
+        {"command": "status", "description": "查看当前状态"},
+        {"command": "persist", "description": "启用云端存储"},
+        {"command": "clearcookie", "description": "清除 Cookie"},
+        {"command": "forget", "description": "删除所有云端数据"},
+        {"command": "help", "description": "显示帮助信息"},
+    ]
+
+    try:
+        with httpx.Client(timeout=10) as client:
+            resp = client.post(
+                f"{TELEGRAM_API}/bot{TELEGRAM_TOKEN}/setMyCommands",
+                json={"commands": commands},
+            )
+            return resp.status_code == 200
+    except Exception:
+        return False
+
+
 def send_chat_action(chat_id: int, action: str = "typing"):
     """Send chat action (typing indicator, etc.).
 
@@ -539,55 +566,88 @@ def handle_message(message: dict):
     user_cookie = get_user_cookie(user_id)
     user_has_persist = get_user_persist(user_id)
 
-    # Handle /start command
+    # Handle /start command - Onboarding flow
     if text == "/start":
-        cookie_status = "✅ 已设置" if user_cookie else "❌ 未设置"
-        persist_status = "☁️ 云端" if user_has_persist else "💾 本地"
-        send_message(
-            chat_id,
-            f"🔗 *JM2E Bot* \\- JMComic to E\\-Hentai/ExHentai\n\n"
-            f"发送 JMComic ID 即可查询链接\\!\n\n"
-            f"*当前状态:*\n"
-            f"• Cookie: {cookie_status}\n"
-            f"• 存储: {persist_status}\n\n"
-            f"*示例:* `540930` 或 `/jm 540930`\n\n"
-            f"*搜索顺序:*\n"
-            f"1\\. ExHentai \\(需设置cookie\\)\n"
-            f"2\\. E\\-Hentai\n"
-            f"3\\. wnacg\n\n"
-            f"使用 `/help` 查看所有命令",
-            parse_mode="MarkdownV2",
-        )
+        # Set bot commands menu (do this once on start)
+        set_my_commands()
+
+        if user_cookie:
+            # Returning user with cookie set
+            persist_info = "☁️ 云端保存" if user_has_persist else "💾 本地缓存"
+            send_message(
+                chat_id,
+                f"👋 <b>欢迎回来！</b>\n\n"
+                f"✅ ExHentai Cookie 已设置\n"
+                f"📦 存储状态: {persist_info}\n\n"
+                f"直接发送 JM ID 即可查询，例如:\n"
+                f"<code>540930</code>",
+                parse_mode="HTML",
+                reply_markup={
+                    "inline_keyboard": [
+                        [
+                            {"text": "📊 查看状态", "callback_data": "status"},
+                            {"text": "❓ 帮助", "callback_data": "help"},
+                        ]
+                    ]
+                },
+            )
+        else:
+            # New user - show onboarding
+            send_message(
+                chat_id,
+                "🔗 <b>JM2E Bot</b>\n"
+                "<i>JMComic → E-Hentai/ExHentai 链接转换</i>\n\n"
+                "━━━━━━━━━━━━━━━━\n\n"
+                "📖 <b>使用方法</b>\n"
+                "直接发送 JMComic ID 即可查询对应链接\n\n"
+                "💡 <b>示例</b>\n"
+                "<code>540930</code> 或 <code>/jm 540930</code>\n\n"
+                "━━━━━━━━━━━━━━━━\n\n"
+                "🔍 <b>搜索顺序</b>\n"
+                "1. E-Hentai (默认)\n"
+                "2. wnacg (备选)\n\n"
+                "🔞 <b>解锁 ExHentai</b>\n"
+                "设置 Cookie 后可搜索 ExHentai，找到更多内容",
+                parse_mode="HTML",
+                reply_markup={
+                    "inline_keyboard": [
+                        [
+                            {"text": "🍪 设置 Cookie", "callback_data": "guide_cookie"},
+                        ],
+                        [
+                            {"text": "🚀 直接开始使用", "callback_data": "dismiss"},
+                            {"text": "❓ 帮助", "callback_data": "help"},
+                        ],
+                    ]
+                },
+            )
         return
 
     # Handle /help command
     if text == "/help":
-        cloud_cmds = (
-            "\n*云端存储:*\n"
-            "/persist \\- 启用云端存储 \\(cookie不丢失\\)\n"
-            "/forget \\- 删除所有云端数据\n"
+        cloud_section = (
+            "\n<b>☁️ 云端存储</b>\n/persist - 启用云端存储\n/forget - 删除所有云端数据\n"
             if kv_available()
             else ""
         )
         send_message(
             chat_id,
-            "📖 *JM2E Bot 使用帮助*\n\n"
-            "*基本用法:*\n"
-            "• 直接发送ID: `540930`\n"
-            "• 使用命令: `/jm 540930`\n"
-            "• 粘贴JMComic链接\n\n"
-            "*命令列表:*\n"
-            "/start \\- 开始使用\n"
-            "/help \\- 显示帮助\n"
-            "/jm \\<id\\> \\- 转换JM ID\n"
-            "/setcookie \\- 设置ExHentai cookie\n"
-            "/clearcookie \\- 清除cookie\n"
-            "/status \\- 查看当前状态\n"
-            f"{cloud_cmds}\n"
-            "*设置Cookie:*\n"
-            "直接粘贴cookie，或使用:\n"
-            "`/setcookie ipb\\_member\\_id=xxx; ipb\\_pass\\_hash=xxx`",
-            parse_mode="MarkdownV2",
+            "📖 <b>JM2E Bot 帮助</b>\n\n"
+            "<b>🔍 基本用法</b>\n"
+            "• 直接发送 ID: <code>540930</code>\n"
+            "• 使用命令: <code>/jm 540930</code>\n"
+            "• 粘贴 JMComic 链接\n\n"
+            "<b>📋 命令列表</b>\n"
+            "/start - 开始使用\n"
+            "/jm &lt;id&gt; - 转换 JM ID\n"
+            "/status - 查看当前状态\n"
+            "/setcookie - 设置 Cookie\n"
+            "/clearcookie - 清除 Cookie\n"
+            f"{cloud_section}\n"
+            "<b>🍪 设置 Cookie</b>\n"
+            "直接粘贴 Cookie，或:\n"
+            "<code>/setcookie ipb_member_id=xxx; ipb_pass_hash=xxx</code>",
+            parse_mode="HTML",
         )
         return
 
@@ -598,23 +658,33 @@ def handle_message(message: dict):
 
         if kv_available():
             persist_status = "☁️ 已启用" if user_has_persist else "💾 仅本地"
-            persist_hint = (
-                "\\(cookie已云端保存\\)"
-                if user_has_persist
-                else "\\(重启后可能丢失，用 /persist 启用云端存储\\)"
-            )
+            persist_hint = "(已云端保存)" if user_has_persist else "(重启可能丢失)"
         else:
             persist_status = "⚠️ 不可用"
-            persist_hint = "\\(服务器未配置云存储\\)"
+            persist_hint = ""
 
         send_message(
             chat_id,
-            f"📊 *当前设置*\n\n"
-            f"ExHentai Cookie: {cookie_status}\n"
-            f"搜索顺序: {search_order}\n"
-            f"云端存储: {persist_status}\n"
-            f"{persist_hint}",
-            parse_mode="MarkdownV2",
+            f"📊 <b>当前状态</b>\n\n"
+            f"🍪 Cookie: {cookie_status}\n"
+            f"🔍 搜索顺序: {search_order}\n"
+            f"☁️ 云端存储: {persist_status} {persist_hint}",
+            parse_mode="HTML",
+            reply_markup={
+                "inline_keyboard": [
+                    [
+                        {"text": "🍪 设置 Cookie", "callback_data": "guide_cookie"},
+                        {"text": "☁️ 启用云存储", "callback_data": "persist"},
+                    ]
+                    if not user_cookie
+                    else [
+                        {"text": "🗑️ 清除 Cookie", "callback_data": "clearcookie"},
+                        {"text": "☁️ 云存储", "callback_data": "persist"},
+                    ]
+                ]
+            }
+            if not user_has_persist
+            else None,
         )
         return
 
@@ -1073,6 +1143,134 @@ def handle_inline_query(inline_query: dict):
         pass
 
 
+def handle_callback_query(callback_query: dict):
+    """Handle callback query from inline keyboard buttons."""
+    query_id = callback_query.get("id")
+    data = callback_query.get("data", "")
+    user_id = callback_query.get("from", {}).get("id")
+    chat_id = callback_query.get("message", {}).get("chat", {}).get("id")
+    message_id = callback_query.get("message", {}).get("message_id")
+
+    if not query_id or not chat_id:
+        return
+
+    # Answer callback to remove loading state
+    def answer_callback(text: str = "", show_alert: bool = False):
+        try:
+            with httpx.Client(timeout=5) as client:
+                client.post(
+                    f"{TELEGRAM_API}/bot{TELEGRAM_TOKEN}/answerCallbackQuery",
+                    json={
+                        "callback_query_id": query_id,
+                        "text": text,
+                        "show_alert": show_alert,
+                    },
+                )
+        except Exception:
+            pass
+
+    if data == "help":
+        answer_callback()
+        # Send help message
+        cloud_section = (
+            "\n<b>☁️ 云端存储</b>\n/persist - 启用云端存储\n/forget - 删除所有云端数据\n"
+            if kv_available()
+            else ""
+        )
+        send_message(
+            chat_id,
+            "📖 <b>JM2E Bot 帮助</b>\n\n"
+            "<b>🔍 基本用法</b>\n"
+            "• 直接发送 ID: <code>540930</code>\n"
+            "• 使用命令: <code>/jm 540930</code>\n"
+            "• 粘贴 JMComic 链接\n\n"
+            "<b>📋 命令列表</b>\n"
+            "/start - 开始使用\n"
+            "/jm &lt;id&gt; - 转换 JM ID\n"
+            "/status - 查看当前状态\n"
+            "/setcookie - 设置 Cookie\n"
+            "/clearcookie - 清除 Cookie\n"
+            f"{cloud_section}\n"
+            "<b>🍪 设置 Cookie</b>\n"
+            "直接粘贴 Cookie，或:\n"
+            "<code>/setcookie ipb_member_id=xxx; ipb_pass_hash=xxx</code>",
+            parse_mode="HTML",
+        )
+
+    elif data == "guide_cookie":
+        answer_callback()
+        send_message(
+            chat_id,
+            "🍪 <b>设置 ExHentai Cookie</b>\n\n"
+            "<b>获取方法:</b>\n"
+            "1. 登录 exhentai.org\n"
+            "2. 按 F12 打开开发者工具\n"
+            "3. 进入 Application → Cookies\n"
+            "4. 复制以下三个值:\n"
+            "   • <code>ipb_member_id</code>\n"
+            "   • <code>ipb_pass_hash</code>\n"
+            "   • <code>igneous</code>\n\n"
+            "<b>设置方法:</b>\n"
+            "直接粘贴 Cookie，格式如:\n"
+            "<code>ipb_member_id: xxx\n"
+            "ipb_pass_hash: xxx\n"
+            "igneous: xxx</code>\n\n"
+            "或使用命令:\n"
+            "<code>/setcookie ipb_member_id=xxx; ipb_pass_hash=xxx; igneous=xxx</code>",
+            parse_mode="HTML",
+        )
+
+    elif data == "status":
+        answer_callback()
+        user_cookie = get_user_cookie(user_id)
+        user_has_persist = get_user_persist(user_id)
+        cookie_status = "✅ 已设置" if user_cookie else "❌ 未设置"
+        search_order = "ExHentai → wnacg" if user_cookie else "E-Hentai → wnacg"
+        persist_status = "☁️ 已启用" if user_has_persist else "💾 仅本地"
+
+        send_message(
+            chat_id,
+            f"📊 <b>当前状态</b>\n\n"
+            f"🍪 Cookie: {cookie_status}\n"
+            f"🔍 搜索顺序: {search_order}\n"
+            f"☁️ 云端存储: {persist_status}",
+            parse_mode="HTML",
+        )
+
+    elif data == "persist":
+        user_cookie = get_user_cookie(user_id)
+        user_has_persist = get_user_persist(user_id)
+
+        if user_has_persist:
+            answer_callback("☁️ 云端存储已启用", show_alert=False)
+        elif not user_cookie:
+            answer_callback("❌ 请先设置 Cookie", show_alert=True)
+        elif set_user_persist(user_id, True):
+            answer_callback("✅ 云端存储已启用！", show_alert=False)
+            send_message(
+                chat_id,
+                "✅ 云端存储已启用！\n\n你的 Cookie 已保存到云端，即使服务器重启也不会丢失。",
+            )
+        else:
+            answer_callback("❌ 启用失败，请稍后重试", show_alert=True)
+
+    elif data == "clearcookie":
+        user_cookie = get_user_cookie(user_id)
+        if user_cookie:
+            delete_user_cookie(user_id)
+            answer_callback("🗑️ Cookie 已清除", show_alert=False)
+            send_message(chat_id, "🗑️ Cookie 已清除\n\n搜索将使用 E-Hentai。")
+        else:
+            answer_callback("ℹ️ 未设置 Cookie", show_alert=False)
+
+    elif data == "dismiss":
+        answer_callback()
+        # Just dismiss, do nothing
+
+    else:
+        answer_callback()
+
+
 class handler(BaseHTTPRequestHandler):
     """Vercel serverless function handler."""
 
@@ -1092,6 +1290,11 @@ class handler(BaseHTTPRequestHandler):
             inline_query = update.get("inline_query")
             if inline_query:
                 handle_inline_query(inline_query)
+
+            # Process callback query (button clicks)
+            callback_query = update.get("callback_query")
+            if callback_query:
+                handle_callback_query(callback_query)
 
             # Always return 200 to Telegram
             self.send_response(200)
