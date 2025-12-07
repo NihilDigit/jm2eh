@@ -40,19 +40,35 @@ def send_message(
     text: str,
     parse_mode: str | None = None,
     disable_preview: bool = False,
-):
-    """Send message via Telegram API."""
+    reply_to_message_id: int | None = None,
+    reply_markup: dict | None = None,
+) -> int | None:
+    """Send message via Telegram API.
+
+    Returns the message_id of the sent message, or None on failure.
+    """
     payload = {"chat_id": chat_id, "text": text}
     if parse_mode:
         payload["parse_mode"] = parse_mode
     if disable_preview:
         payload["disable_web_page_preview"] = True
+    if reply_to_message_id:
+        payload["reply_to_message_id"] = reply_to_message_id
+    if reply_markup:
+        payload["reply_markup"] = reply_markup
 
-    with httpx.Client(timeout=10) as client:
-        client.post(
-            f"{TELEGRAM_API}/bot{TELEGRAM_TOKEN}/sendMessage",
-            json=payload,
-        )
+    try:
+        with httpx.Client(timeout=10) as client:
+            resp = client.post(
+                f"{TELEGRAM_API}/bot{TELEGRAM_TOKEN}/sendMessage",
+                json=payload,
+            )
+            data = resp.json()
+            if data.get("ok"):
+                return data.get("result", {}).get("message_id")
+    except Exception:
+        pass
+    return None
 
 
 def delete_message(chat_id: int, message_id: int):
@@ -65,6 +81,74 @@ def delete_message(chat_id: int, message_id: int):
             )
     except Exception:
         pass  # Ignore deletion errors
+
+
+def send_chat_action(chat_id: int, action: str = "typing"):
+    """Send chat action (typing indicator, etc.).
+
+    Available actions:
+    - typing: for text messages
+    - upload_photo: for photos
+    - upload_document: for files
+    - find_location: for location data
+    """
+    try:
+        with httpx.Client(timeout=5) as client:
+            client.post(
+                f"{TELEGRAM_API}/bot{TELEGRAM_TOKEN}/sendChatAction",
+                json={"chat_id": chat_id, "action": action},
+            )
+    except Exception:
+        pass  # Non-critical, ignore errors
+
+
+def set_message_reaction(
+    chat_id: int, message_id: int | None, emoji: str, is_big: bool = False
+):
+    """Set reaction on a message.
+
+    Popular emoji reactions: 👍 👎 ❤️ 🔥 🎉 😢 💯 👀 🤔 🤯
+    """
+    if message_id is None:
+        return
+
+    try:
+        with httpx.Client(timeout=5) as client:
+            client.post(
+                f"{TELEGRAM_API}/bot{TELEGRAM_TOKEN}/setMessageReaction",
+                json={
+                    "chat_id": chat_id,
+                    "message_id": message_id,
+                    "reaction": [{"type": "emoji", "emoji": emoji}],
+                    "is_big": is_big,
+                },
+            )
+    except Exception:
+        pass  # Reactions may not be available in all chats
+
+
+def edit_message(
+    chat_id: int,
+    message_id: int,
+    text: str,
+    parse_mode: str | None = None,
+    disable_preview: bool = False,
+):
+    """Edit an existing message."""
+    payload = {"chat_id": chat_id, "message_id": message_id, "text": text}
+    if parse_mode:
+        payload["parse_mode"] = parse_mode
+    if disable_preview:
+        payload["disable_web_page_preview"] = True
+
+    try:
+        with httpx.Client(timeout=10) as client:
+            client.post(
+                f"{TELEGRAM_API}/bot{TELEGRAM_TOKEN}/editMessageText",
+                json=payload,
+            )
+    except Exception:
+        pass  # Fall back to sending new message if edit fails
 
 
 def normalize_cookie(raw: str) -> Optional[str]:
@@ -349,14 +433,27 @@ def handle_message(message: dict):
             )
         return
 
-    # Process conversion
-    send_message(chat_id, f"🔍 正在查询 JM{jm_id}...")
+    # React to the message to show we received it
+    set_message_reaction(chat_id, message_id, "👀")
+
+    # Show typing indicator
+    send_chat_action(chat_id, "typing")
+
+    # Send initial status message (will be edited later)
+    status_msg_id = send_message(
+        chat_id,
+        f"🔍 正在查询 JM{jm_id}...",
+        reply_to_message_id=message_id,
+    )
 
     try:
         converter = get_converter(user_cookie)
         result = converter.convert(jm_id)
 
         if result.link:
+            # Success! Update reaction
+            set_message_reaction(chat_id, message_id, "🔥")
+
             source_emoji = {"exhentai": "🔞", "ehentai": "✅", "wnacg": "📗"}.get(
                 result.source, "📎"
             )
@@ -378,7 +475,48 @@ def handle_message(message: dict):
                 f"🔗 {source_name}\n\n"
                 f"[👉 打开链接]({result.link})"
             )
+
+            # Create inline keyboard with useful buttons
+            inline_keyboard = {
+                "inline_keyboard": [
+                    [
+                        {"text": "🔗 打开链接", "url": result.link},
+                        {
+                            "text": "📋 JMComic",
+                            "url": f"https://18comic.vip/album/{jm_id}",
+                        },
+                    ]
+                ]
+            }
+
+            # Edit the status message with the result
+            if status_msg_id:
+                edit_message(
+                    chat_id,
+                    status_msg_id,
+                    response,
+                    parse_mode="Markdown",
+                    disable_preview=True,
+                )
+                # Send new message with buttons (can't add buttons via edit easily)
+                send_message(
+                    chat_id,
+                    "⬆️ 点击按钮快速访问",
+                    reply_markup=inline_keyboard,
+                )
+            else:
+                send_message(
+                    chat_id,
+                    response,
+                    parse_mode="Markdown",
+                    disable_preview=True,
+                    reply_to_message_id=message_id,
+                    reply_markup=inline_keyboard,
+                )
         else:
+            # Not found, sad reaction
+            set_message_reaction(chat_id, message_id, "😢")
+
             title_display = result.title[:80] + (
                 "..." if len(result.title) > 80 else ""
             )
@@ -391,14 +529,190 @@ def handle_message(message: dict):
             if not user_cookie:
                 response += "\n\n💡 提示: 设置ExHentai cookie可能找到更多结果。"
 
-        send_message(chat_id, response, parse_mode="Markdown", disable_preview=True)
+            # Add a button to search manually
+            inline_keyboard = {
+                "inline_keyboard": [
+                    [
+                        {
+                            "text": "🔍 Google搜索",
+                            "url": f"https://www.google.com/search?q={result.title}+site:e-hentai.org",
+                        },
+                        {
+                            "text": "📋 JMComic",
+                            "url": f"https://18comic.vip/album/{jm_id}",
+                        },
+                    ]
+                ]
+            }
+
+            if status_msg_id:
+                edit_message(
+                    chat_id,
+                    status_msg_id,
+                    response,
+                    parse_mode="Markdown",
+                    disable_preview=True,
+                )
+            else:
+                send_message(
+                    chat_id,
+                    response,
+                    parse_mode="Markdown",
+                    disable_preview=True,
+                    reply_to_message_id=message_id,
+                    reply_markup=inline_keyboard,
+                )
 
     except Exception as e:
+        # Error reaction
+        set_message_reaction(chat_id, message_id, "👎")
+
         error_msg = str(e)[:150]
-        send_message(
-            chat_id,
-            f"❌ 查询出错\n\nJM{jm_id}: {error_msg}\n\n请稍后重试。",
+        response = f"❌ 查询出错\n\nJM{jm_id}: {error_msg}\n\n请稍后重试。"
+
+        if status_msg_id:
+            edit_message(chat_id, status_msg_id, response)
+        else:
+            send_message(chat_id, response, reply_to_message_id=message_id)
+
+
+def handle_inline_query(inline_query: dict):
+    """Handle inline query for quick JM ID lookup.
+
+    Users can type @botname 540930 in any chat to get results.
+    """
+    query_id = inline_query.get("id")
+    query_text = inline_query.get("query", "").strip()
+    user_id = inline_query.get("from", {}).get("id")
+
+    if not query_id:
+        return
+
+    # Get user's cookie if available
+    user_cookie = _user_cookies.get(user_id)
+
+    # Try to extract JM ID
+    jm_id = extract_jm_id(query_text) if query_text else None
+
+    results = []
+
+    if jm_id:
+        try:
+            converter = get_converter(user_cookie)
+            result = converter.convert(jm_id)
+
+            if result.link:
+                source_emoji = {"exhentai": "🔞", "ehentai": "✅", "wnacg": "📗"}.get(
+                    result.source, "📎"
+                )
+                source_name = {
+                    "exhentai": "ExHentai",
+                    "ehentai": "E-Hentai",
+                    "wnacg": "绅士漫画",
+                }.get(result.source, result.source)
+
+                title_display = result.title[:60] + (
+                    "..." if len(result.title) > 60 else ""
+                )
+
+                # Create article result
+                results.append(
+                    {
+                        "type": "article",
+                        "id": f"jm_{jm_id}_found",
+                        "title": f"{source_emoji} JM{jm_id}",
+                        "description": f"{title_display} - {result.author}",
+                        "input_message_content": {
+                            "message_text": (
+                                f"{source_emoji} *JM{jm_id}*\n\n"
+                                f"📚 {title_display}\n"
+                                f"✍️ {result.author}\n"
+                                f"🔗 {source_name}\n\n"
+                                f"[👉 打开链接]({result.link})"
+                            ),
+                            "parse_mode": "Markdown",
+                            "disable_web_page_preview": True,
+                        },
+                        "reply_markup": {
+                            "inline_keyboard": [
+                                [
+                                    {"text": "🔗 打开链接", "url": result.link},
+                                    {
+                                        "text": "📋 JMComic",
+                                        "url": f"https://18comic.vip/album/{jm_id}",
+                                    },
+                                ]
+                            ]
+                        },
+                    }
+                )
+            else:
+                # Not found
+                title_display = result.title[:60] + (
+                    "..." if len(result.title) > 60 else ""
+                )
+                results.append(
+                    {
+                        "type": "article",
+                        "id": f"jm_{jm_id}_notfound",
+                        "title": f"❌ JM{jm_id} - 未找到",
+                        "description": f"{title_display} - 无匹配画廊",
+                        "input_message_content": {
+                            "message_text": (
+                                f"❌ *JM{jm_id}*\n\n"
+                                f"📚 {title_display}\n"
+                                f"✍️ {result.author}\n\n"
+                                "未找到匹配的画廊。"
+                            ),
+                            "parse_mode": "Markdown",
+                        },
+                    }
+                )
+        except Exception as e:
+            results.append(
+                {
+                    "type": "article",
+                    "id": f"jm_{jm_id}_error",
+                    "title": f"❌ JM{jm_id} - 查询出错",
+                    "description": str(e)[:50],
+                    "input_message_content": {
+                        "message_text": f"❌ 查询 JM{jm_id} 时出错: {str(e)[:100]}",
+                    },
+                }
+            )
+    else:
+        # No valid JM ID, show help
+        results.append(
+            {
+                "type": "article",
+                "id": "help",
+                "title": "🔍 输入JMComic ID",
+                "description": "例如: 540930 或 jm540930",
+                "input_message_content": {
+                    "message_text": (
+                        "🔗 *JM2E Bot*\n\n"
+                        "使用方法: `@jm2eh_bot <JM ID>`\n"
+                        "例如: `@jm2eh_bot 540930`"
+                    ),
+                    "parse_mode": "Markdown",
+                },
+            }
         )
+
+    # Send answer
+    try:
+        with httpx.Client(timeout=30) as client:
+            client.post(
+                f"{TELEGRAM_API}/bot{TELEGRAM_TOKEN}/answerInlineQuery",
+                json={
+                    "inline_query_id": query_id,
+                    "results": results,
+                    "cache_time": 300,  # Cache for 5 minutes
+                    "is_personal": True,  # Results may vary by user (cookie)
+                },
+            )
+    except Exception:
+        pass
 
 
 class handler(BaseHTTPRequestHandler):
@@ -415,6 +729,11 @@ class handler(BaseHTTPRequestHandler):
             message = update.get("message")
             if message:
                 handle_message(message)
+
+            # Process inline query
+            inline_query = update.get("inline_query")
+            if inline_query:
+                handle_inline_query(inline_query)
 
             # Always return 200 to Telegram
             self.send_response(200)
