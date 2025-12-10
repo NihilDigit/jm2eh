@@ -43,6 +43,9 @@ _user_persist: dict[int, bool] = {}
 # User blur preference (in-memory cache, default True = blur enabled)
 _user_blur: dict[int, bool] = {}
 
+# User wnacg-only preference (in-memory cache, default False)
+_user_wnacg_only: dict[int, bool] = {}
+
 
 # ============== Storage Helper Functions (Edge Config / KV) ==============
 
@@ -283,18 +286,21 @@ def set_user_persist(user_id: int, enabled: bool) -> bool:
 
 
 def delete_all_user_data(user_id: int) -> None:
-    """Delete all user data (cookie + persistence setting + blur setting)."""
+    """Delete all user data (cookie + persistence setting + blur setting + wnacg_only)."""
     if user_id in _user_cookies:
         del _user_cookies[user_id]
     if user_id in _user_persist:
         del _user_persist[user_id]
     if user_id in _user_blur:
         del _user_blur[user_id]
+    if user_id in _user_wnacg_only:
+        del _user_wnacg_only[user_id]
 
     if kv_available():
         kv_delete(f"user_{user_id}_cookie")
         kv_delete(f"user_{user_id}_persist")
         kv_delete(f"user_{user_id}_blur")
+        kv_delete(f"user_{user_id}_wnacg_only")
 
 
 def get_user_blur(user_id: int) -> bool:
@@ -319,6 +325,30 @@ def set_user_blur(user_id: int, enabled: bool) -> None:
     # If user has persistence enabled, save to KV
     if _user_persist.get(user_id) and kv_available():
         kv_set(f"user_{user_id}_blur", "1" if enabled else "0")
+
+
+def get_user_wnacg_only(user_id: int) -> bool:
+    """Get user's wnacg-only preference. Default is False."""
+    if user_id in _user_wnacg_only:
+        return _user_wnacg_only[user_id]
+
+    if kv_available():
+        wnacg_only = kv_get(f"user_{user_id}_wnacg_only")
+        if wnacg_only is not None:
+            result = wnacg_only == "1"
+            _user_wnacg_only[user_id] = result
+            return result
+
+    return False  # Default: wnacg-only disabled
+
+
+def set_user_wnacg_only(user_id: int, enabled: bool) -> None:
+    """Set user's wnacg-only preference."""
+    _user_wnacg_only[user_id] = enabled
+
+    # If user has persistence enabled, save to KV
+    if _user_persist.get(user_id) and kv_available():
+        kv_set(f"user_{user_id}_wnacg_only", "1" if enabled else "0")
 
 
 def get_converter(exhentai_cookie: Optional[str] = None) -> JM2EConverter:
@@ -766,9 +796,16 @@ def handle_message(message: dict):
     # Handle /status command
     if text == "/status":
         cookie_status = "✅ 已设置" if user_cookie else "❌ 未设置"
-        search_order = "ExHentai → wnacg" if user_cookie else "E-Hentai → wnacg"
+        wnacg_only = get_user_wnacg_only(user_id)
+        if wnacg_only:
+            search_order = "wnacg only"
+        elif user_cookie:
+            search_order = "ExHentai → wnacg"
+        else:
+            search_order = "E-Hentai → wnacg"
         blur_enabled = get_user_blur(user_id)
         blur_status = "🔒 已开启" if blur_enabled else "🔓 已关闭"
+        wnacg_status = "📗 已开启" if wnacg_only else "❌ 已关闭"
 
         if kv_available():
             persist_status = "☁️ 已启用" if user_has_persist else "💾 仅本地"
@@ -782,6 +819,7 @@ def handle_message(message: dict):
             f"📊 <b>当前状态</b>\n\n"
             f"🍪 Cookie: {cookie_status}\n"
             f"🔍 搜索顺序: {search_order}\n"
+            f"📗 WNACG-only: {wnacg_status}\n"
             f"🖼️ 封面模糊: {blur_status}\n"
             f"☁️ 云端存储: {persist_status} {persist_hint}",
             parse_mode="HTML",
@@ -814,6 +852,26 @@ def handle_message(message: dict):
             send_message(
                 chat_id,
                 "🔓 封面模糊已<b>关闭</b>\n\n封面将直接显示。",
+                parse_mode="HTML",
+            )
+        return
+
+    # Handle /wnacg command (toggle wnacg-only mode)
+    if text == "/wnacg":
+        wnacg_only = get_user_wnacg_only(user_id)
+        new_wnacg_only = not wnacg_only
+        set_user_wnacg_only(user_id, new_wnacg_only)
+
+        if new_wnacg_only:
+            send_message(
+                chat_id,
+                "📗 <b>WNACG-only 模式已开启</b>\n\n跳过 E-Hentai，只搜索绅士漫画。",
+                parse_mode="HTML",
+            )
+        else:
+            send_message(
+                chat_id,
+                "🔄 <b>WNACG-only 模式已关闭</b>\n\n恢复正常搜索顺序。",
                 parse_mode="HTML",
             )
         return
@@ -984,7 +1042,8 @@ def handle_message(message: dict):
 
     try:
         converter = get_converter(user_cookie)
-        result = converter.convert(jm_id)
+        wnacg_only = get_user_wnacg_only(user_id)
+        result = converter.convert(jm_id, wnacg_only=wnacg_only)
 
         if result.link:
             # Success! Update reaction
