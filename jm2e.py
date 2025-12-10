@@ -845,12 +845,15 @@ class JM2EConverter:
 
         return None, best_score
 
-    def convert(self, jm_id: str, concurrent: bool = True) -> ConversionResult:
+    def convert(
+        self, jm_id: str, concurrent: bool = True, wnacg_only: bool = False
+    ) -> ConversionResult:
         """Convert JMComic ID to link with multi-query flow.
 
         Args:
             jm_id: JMComic album ID
             concurrent: If True, run initial E-Hentai queries concurrently for speed
+            wnacg_only: If True, skip E-Hentai/ExHentai and only search wnacg
 
         Query flow (if ExHentai cookie is provided):
         0. ExHentai: Same queries as E-Hentai but on exhentai.org (priority)
@@ -873,6 +876,32 @@ class JM2EConverter:
         cover_url = info.get("cover_url", "")
 
         print(f"JM{jm_id}: {title}")
+
+        # WNACG-only mode: skip all E-Hentai/ExHentai searches
+        if wnacg_only:
+            print("  → WNACG-only mode, skipping E-Hentai...")
+            link, sim = self.search_wnacg(
+                oname, candidates, full_title=title, author=author
+            )
+            if link:
+                return ConversionResult(
+                    jm_id=jm_id,
+                    title=title,
+                    author=author,
+                    link=link,
+                    source="wnacg",
+                    similarity=sim,
+                    cover_url=cover_url,
+                )
+            return ConversionResult(
+                jm_id=jm_id,
+                title=title,
+                author=author,
+                link="",
+                source="none",
+                similarity=0.0,
+                cover_url=cover_url,
+            )
 
         # Create search context with pre-computed values
         ctx = SearchContext(

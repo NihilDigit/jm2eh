@@ -237,14 +237,40 @@ async def clear_cookie(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         )
 
 
+async def toggle_wnacg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Toggle WNACG-only mode (disable E-Hentai search)."""
+    current = context.user_data.get("wnacg_only", False)
+    context.user_data["wnacg_only"] = not current
+
+    if not current:
+        await update.message.reply_text(
+            "📗 *WNACG-only mode enabled*\n\nE-Hentai search is now disabled.",
+            parse_mode="Markdown",
+        )
+    else:
+        await update.message.reply_text(
+            "🔄 *WNACG-only mode disabled*\n\nE-Hentai search is now enabled.",
+            parse_mode="Markdown",
+        )
+
+
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show current user settings."""
     has_cookie = context.user_data.get("exhentai_cookie") is not None
+    wnacg_only = context.user_data.get("wnacg_only", False)
+
+    if wnacg_only:
+        priority = "wnacg only"
+    elif has_cookie:
+        priority = "ExHentai → E-Hentai → wnacg"
+    else:
+        priority = "E-Hentai → wnacg"
 
     status_text = (
         "📊 *Current Settings*\n\n"
         f"ExHentai cookie: {'✅ Set' if has_cookie else '❌ Not set'}\n"
-        f"Search priority: {'ExHentai → E-Hentai → wnacg' if has_cookie else 'E-Hentai → wnacg'}"
+        f"WNACG-only mode: {'✅ On' if wnacg_only else '❌ Off'}\n"
+        f"Search priority: {priority}"
     )
 
     await update.message.reply_text(status_text, parse_mode="Markdown")
@@ -289,13 +315,14 @@ async def process_jm_id(
 
     # Get user's ExHentai cookie if set
     exhentai_cookie = context.user_data.get("exhentai_cookie")
+    wnacg_only = context.user_data.get("wnacg_only", False)
 
     # Send "processing" message
     processing_msg = await update.message.reply_text(f"🔍 Looking up JM{jm_id}...")
 
     try:
         conv = get_converter(exhentai_cookie)
-        result = conv.convert(jm_id)
+        result = conv.convert(jm_id, wnacg_only=wnacg_only)
 
         # Format response based on source
         source_emoji = {
@@ -359,6 +386,7 @@ def main() -> None:
     application.add_handler(CommandHandler("setcookie", set_cookie))
     application.add_handler(CommandHandler("clearcookie", clear_cookie))
     application.add_handler(CommandHandler("status", status))
+    application.add_handler(CommandHandler("wnacg", toggle_wnacg))
     application.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)
     )
